@@ -1,6 +1,9 @@
 import os
 import sys
+import html
+import json
 import markdown
+import uuid
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -8,25 +11,25 @@ from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 
 from src.agent import run_pricing_agent
-from src.llm_reasoning import generate_business_explanation
+from src.llm_reasoning import generate_business_explanation, generate_followup_suggestions
 
 app = FastAPI(title="PricePilot")
-
+RESULT_CACHE = {}
 
 STYLE = """
 <style>
     :root {
-        --bg: #f6f8fb;
+        --bg: #f5f8fb;
         --card: #ffffff;
-        --text: #172033;
+        --text: #101828;
         --muted: #667085;
-        --border: #e5e7eb;
-        --accent: #2563eb;
-        --accent-dark: #1d4ed8;
-        --green: #15803d;
-        --green-bg: #ecfdf3;
-        --blue-bg: #eff6ff;
-        --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+        --border: #d9e2ec;
+        --accent: #0077b6;
+        --accent-dark: #005f92;
+        --accent-light: #e0f4ff;
+        --green: #137333;
+        --green-bg: #eaf8ef;
+        --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
     }
 
     * { box-sizing: border-box; }
@@ -38,282 +41,444 @@ STYLE = """
         color: var(--text);
     }
 
-    .page {
-        max-width: 1180px;
-        margin: 0 auto;
-        padding: 48px 24px;
+    .topbar {
+        background: white;
+        border-bottom: 1px solid var(--border);
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        position: sticky;
+        top: 0;
+        z-index: 20;
     }
 
-    .hero {
-        background: linear-gradient(135deg, #0f172a, #1e3a8a);
+    .logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        background: var(--accent);
         color: white;
-        border-radius: 28px;
-        padding: 48px;
-        box-shadow: var(--shadow);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 22px;
     }
 
-    .badge {
-        display: inline-flex;
-        background: rgba(255, 255, 255, 0.14);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        padding: 8px 14px;
-        border-radius: 999px;
+    .topbar-title {
+        font-weight: 800;
+        font-size: 18px;
+    }
+
+    .topbar-subtitle {
+        color: var(--muted);
         font-size: 14px;
-        margin-bottom: 20px;
+    }
+
+    .home-page {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 36px 22px 120px;
+    }
+
+    .chat-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-bottom: 160px;  /* increase this */
+    }
+
+    .dashboard-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .chat-panel,
+    .dashboard-panel {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .message-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 16px;
+        align-items: flex-start;
+    }
+
+    .message-row.user {
+        justify-content: flex-end;
+    }
+
+    .avatar {
+        min-width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+    }
+
+    .avatar.user-avatar {
+        background: #e8eef5;
+        color: #344054;
+    }
+
+    .bubble {
+        background: white;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: var(--shadow);
+        max-width: 760px;
+        line-height: 1.45;
+        font-size: 14px;
+    }
+
+    .user-bubble {
+        background: var(--accent);
+        color: white;
+        border-radius: 18px;
+        padding: 12px 16px;
+        max-width: 620px;
+        font-weight: 650;
+        box-shadow: var(--shadow);
+        font-size: 14px;
     }
 
     h1 {
-        font-size: 52px;
-        line-height: 1.05;
-        margin: 0 0 16px;
-        letter-spacing: -1.4px;
+        font-size: 24px;
+        margin: 0 0 14px;
+        letter-spacing: -0.5px;
     }
 
-    h2 { margin: 0 0 16px; font-size: 24px; }
-    h3 { margin: 0 0 8px; font-size: 16px; }
+    h2 {
+        font-size: 18px;
+        margin: 0 0 12px;
+    }
+
+    h3 {
+        font-size: 15px;
+        margin: 18px 0 8px;
+    }
 
     p {
         color: var(--muted);
-        line-height: 1.6;
-    }
-
-    .hero p {
-        color: #dbeafe;
-        max-width: 720px;
-        font-size: 18px;
-        margin-bottom: 28px;
-    }
-
-    .search-card {
-        background: white;
-        border-radius: 22px;
-        padding: 10px;
-        display: flex;
-        gap: 10px;
-        max-width: 950px;
-        align-items: end;
-    }
-
-    input, select {
-        flex: 1;
-        border: none;
-        outline: none;
-        font-size: 17px;
-        padding: 16px 18px;
-        border-radius: 16px;
-    }
-
-    button, .button {
-        border: none;
-        background: var(--accent);
-        color: white;
-        padding: 15px 22px;
-        border-radius: 16px;
-        font-weight: 700;
-        font-size: 15px;
-        cursor: pointer;
-        text-decoration: none;
-        display: inline-block;
-    }
-
-    button:hover, .button:hover { background: var(--accent-dark); }
-
-    .examples {
-        margin-top: 22px;
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    .example-pill {
-        color: white;
-        text-decoration: none;
-        padding: 9px 14px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.13);
-        border: 1px solid rgba(255, 255, 255, 0.18);
+        margin: 8px 0;
+        line-height: 1.55;
         font-size: 14px;
     }
 
-    .section { margin-top: 28px; }
-
-    .grid {
-        display: grid;
-        gap: 18px;
+    ul {
+        margin-top: 8px;
+        padding-left: 22px;
     }
 
-    .grid-4 { grid-template-columns: repeat(4, 1fr); }
-    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    li {
+        margin-bottom: 8px;
+        font-size: 14px;
+    }
 
-    .card {
-        background: var(--card);
+    .prompt-card, .card {
+        background: white;
         border: 1px solid var(--border);
         border-radius: 24px;
         padding: 24px;
         box-shadow: var(--shadow);
     }
 
+    textarea, input {
+        width: 100%;
+        border: 1px solid var(--border);
+        outline: none;
+        font-size: 16px;
+        padding: 15px;
+        border-radius: 16px;
+        font-family: inherit;
+        background: white;
+    }
+
+    textarea {
+        min-height: 120px;
+        resize: vertical;
+    }
+
+    button, .button {
+        border: none;
+        background: var(--accent);
+        color: white;
+        padding: 13px 18px;
+        border-radius: 14px;
+        font-weight: 800;
+        font-size: 14px;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    button:hover, .button:hover {
+        background: var(--accent-dark);
+    }
+
+    .examples {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 18px;
+    }
+
+    .chip {
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        color: #344054;
+        padding: 10px 14px;
+        border-radius: 14px;
+        font-size: 13px;
+        cursor: pointer;
+        font-weight: 600;
+
+        max-width: 100%;
+        white-space: normal;   /* 🔥 allows wrapping */
+        line-height: 1.3;
+    }
+
+    .chip:hover {
+        background: var(--accent-light);
+        border-color: #bae6fd;
+    }
+
+    .grid {
+        display: grid;
+        gap: 14px;
+    }
+
+    .grid-3 {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .grid-4 {
+        grid-template-columns: repeat(4, 1fr);
+    }
+
+    .mini-card {
+        background: #f8fafc;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+    }
+
     .metric-label {
         color: var(--muted);
-        font-size: 14px;
-        margin-bottom: 8px;
+        font-size: 13px;
+        margin-bottom: 6px;
     }
 
     .metric-value {
-        font-size: 32px;
-        font-weight: 800;
-        letter-spacing: -0.8px;
-    }
-
-    .metric-subtitle {
-        margin-top: 8px;
-        color: var(--muted);
-        font-size: 14px;
-    }
-
-    .hero-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 20px;
-        margin-bottom: 24px;
-    }
-
-    .query-label { color: var(--muted); margin-bottom: 6px; }
-
-    .query-title {
-        font-size: 36px;
-        font-weight: 800;
-        letter-spacing: -1px;
-    }
-
-    .recommendation-card {
-        background: linear-gradient(135deg, #eff6ff, #ffffff);
-        border: 1px solid #bfdbfe;
-    }
-
-    .recommended-price {
-        font-size: 56px;
+        font-size: 22px;
         font-weight: 900;
-        letter-spacing: -2px;
-        color: #1d4ed8;
-        margin: 8px 0;
     }
 
-    .status-pill {
-        display: inline-block;
+    .recommendation {
         background: var(--green-bg);
+        border-left: 5px solid var(--green);
+        border-radius: 16px;
+        padding: 18px;
+        margin: 16px 0;
+    }
+
+    .recommendation h2 {
         color: var(--green);
-        border: 1px solid #bbf7d0;
-        padding: 7px 11px;
-        border-radius: 999px;
-        font-size: 13px;
-        font-weight: 700;
-        text-transform: capitalize;
     }
 
-    .scenario-card {
-        position: relative;
-        border: 1px solid var(--border);
+    .recommendation-price {
+        font-size: 40px;
+        font-weight: 950;
+        color: var(--green);
+        margin: 6px 0;
     }
 
-    .scenario-card.best {
-        border: 2px solid var(--accent);
-        background: var(--blue-bg);
+    .section-card {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
     }
 
-    .scenario-badge {
-        position: absolute;
-        right: 18px;
-        top: 18px;
-        background: var(--accent);
-        color: white;
-        font-size: 12px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        font-weight: 700;
+    .app-container {
+        display: grid;
+        grid-template-columns: 48% 52%;
+        gap: 20px;
+        height: calc(100vh - 74px);
+        padding: 18px;
+        overflow: hidden;
+    }
+
+    .chat-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-bottom: 24px;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .dashboard-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .bottom-input {
+        position: sticky;
+        bottom: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--border);
+        padding: 12px 0 4px;
+        margin-top: auto;
+        z-index: 20;
+    }
+
+    .bottom-input-inner {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .bottom-input input {
+        flex: 1;
+        margin: 0;
     }
 
     .table {
         width: 100%;
-        border-collapse: collapse;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+        margin-top: 10px;
         overflow: hidden;
-        border-radius: 18px;
-        font-size: 14px;
+        border-radius: 14px;
+    }
+
+    .table tr:last-child td {
+        border-bottom: none;
     }
 
     .table th {
         background: #f8fafc;
-        color: #475467;
         text-align: left;
-        padding: 14px;
+        padding: 10px;
         border-bottom: 1px solid var(--border);
+        color: #475467;
     }
 
     .table td {
-        padding: 14px;
+        padding: 10px;
         border-bottom: 1px solid var(--border);
     }
 
-    .steps {
-        list-style: none;
-        padding: 0;
+    .bottom-input-inner {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .bottom-input input {
+        flex: 1;
         margin: 0;
     }
 
-    .steps li {
-        padding: 13px 0;
-        border-bottom: 1px solid var(--border);
-        color: #344054;
-    }
-
-    .steps li:last-child { border-bottom: none; }
-
-    .chart {
-        display: flex;
-        align-items: end;
-        gap: 8px;
-        height: 260px;
-        padding-top: 16px;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .bar-wrap {
-        flex: 1;
-        display: flex;
-        align-items: end;
-        height: 100%;
-    }
-
-    .bar {
-        width: 100%;
-        min-height: 6px;
-        border-radius: 8px 8px 0 0;
-        background: #93c5fd;
-    }
-
-    .bar.best { background: #2563eb; }
-
-    .chart-labels {
-        display: flex;
-        justify-content: space-between;
-        color: var(--muted);
+    .small-note {
         font-size: 13px;
-        margin-top: 10px;
+        color: var(--muted);
     }
 
-    .error {
-        max-width: 680px;
-        margin: 80px auto;
-        text-align: center;
+    .agent-answer p:first-child {
+        background: var(--green-bg);
+        border-left: 5px solid var(--green);
+        padding: 12px 14px;
+        border-radius: 12px;
+    }
+
+    .app-container {
+        display: grid;
+        grid-template-columns: 48% 52%;
+        gap: 20px;
+        height: calc(100vh - 74px);
+        padding: 18px;
+        overflow: hidden;
+    }
+
+    .chat-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-bottom: 110px;
+    }
+
+    .dashboard-panel {
+        min-width: 0;
+        height: 100%;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .home-page {
+        max-width: 1050px;
+        margin: 0 auto;
+        padding: 56px 22px 120px;
+    }
+
+    .prompt-card {
+        margin-top: 18px;
+    }
+
+    .prompt-card textarea {
+        font-size: 18px;
+        line-height: 1.5;
+    }
+
+    .examples {
+        margin-top: 24px;
+    }
+
+    .chip {
+        background: white;
+        border: 1px solid var(--border);
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+        white-space: normal;
+        line-height: 1.3;
     }
 
     @media (max-width: 900px) {
-        .grid-4, .grid-3 { grid-template-columns: 1fr; }
-        .hero { padding: 32px; }
-        h1 { font-size: 40px; }
-        .search-card { flex-direction: column; align-items: stretch; }
-        .hero-row { flex-direction: column; }
+        .app-container {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 850px) {
+        .grid-3, .grid-4 {
+            grid-template-columns: 1fr;
+        }
+
+        .avatar {
+            display: none;
+        }
+
+        .bottom-input-inner {
+            flex-direction: column;
+        }
+
+        button, .button {
+            width: 100%;
+        }
     }
 </style>
 """
@@ -331,7 +496,128 @@ def percent(value):
     return f"{float(value):.2%}"
 
 
-def build_chart(sim, recommended_price):
+def safe_text(value):
+    return html.escape(str(value or ""), quote=True)
+
+
+def encode_history(history):
+    return html.escape(json.dumps(history), quote=True)
+
+
+def decode_history(history_json):
+    try:
+        return json.loads(history_json) if history_json else []
+    except Exception:
+        return []
+
+
+def render_topbar():
+    return """
+    <div class="topbar">
+        <div class="logo">↗</div>
+        <div>
+            <div class="topbar-title">Pricing Strategy Agent</div>
+            <div class="topbar-subtitle">AI analyst + live pricing dashboard</div>
+        </div>
+    </div>
+    """
+
+
+def render_history(history):
+    html_parts = ""
+
+    for item in history:
+        role = item.get("role")
+        content = item.get("content", "")
+
+        if role == "user":
+            html_parts += f"""
+            <div class="message-row user">
+                <div class="user-bubble">{safe_text(content)}</div>
+                <div class="avatar user-avatar">👤</div>
+            </div>
+            """
+        else:
+            html_parts += f"""
+            <div class="message-row">
+                <div class="avatar">✦</div>
+                <div class="bubble agent-answer">
+                    {markdown.markdown(content.strip(), extensions=["extra"])}
+                </div>
+            </div>
+            """
+
+    return html_parts
+
+
+def make_simulation_table(sim):
+    display = sim.sort_values("expected_revenue", ascending=False).head(5).rename(
+        columns={
+            "price": "Price",
+            "conversion_rate": "Conversion",
+            "expected_customers": "Customers",
+            "expected_revenue": "Revenue",
+        }
+    )
+
+    display["Price"] = display["Price"].apply(price)
+    display["Conversion"] = display["Conversion"].apply(percent)
+    display["Customers"] = display["Customers"].apply(lambda x: f"{float(x):,.0f}")
+    display["Revenue"] = display["Revenue"].apply(money)
+
+    keep_cols = [c for c in ["Price", "Conversion", "Customers", "Revenue"] if c in display.columns]
+    return display[keep_cols].to_html(index=False, classes="table", escape=False)
+
+
+def make_products_table(products_df):
+    cols = [
+        c for c in ["product_name", "name", "title", "price", "rating", "reviews", "source"]
+        if c in products_df.columns
+    ]
+
+    if not cols:
+        return "<p>No product details available.</p>"
+
+    display = products_df[cols].head(6).copy()
+
+    if "price" in display.columns:
+        display["price"] = display["price"].apply(price)
+
+    if "rating" in display.columns:
+        display["rating"] = display["rating"].apply(
+            lambda x: f"{float(x):.1f}" if str(x) != "nan" else ""
+        )
+
+    return display.to_html(index=False, classes="table", escape=False)
+
+
+def suggested_questions(result, history=None):
+    history = history or []
+    parsed_prompt = result.get("parsed_prompt", {})
+    objective = parsed_prompt.get("objective", "maximize_revenue")
+
+    recent_context = "\n".join(
+        f"{item.get('role')}: {item.get('content')[:300]}"
+        for item in history[-4:]
+    )
+
+    try:
+        return generate_followup_suggestions(
+            category=result.get("product_query", "product"),
+            market_summary=result["market_summary"],
+            recommendation=result["recommendation"],
+            objective=f"{objective}\nRecent conversation:\n{recent_context}",
+        )
+    except Exception:
+        return [
+            "What are the risks of this price?",
+            "How would growth pricing change this?",
+            "What competitors matter most?",
+            "Should I launch with a discount?",
+        ]
+
+
+def make_revenue_chart(sim, recommended_price):
     chart_df = sim.sort_values("price").copy()
 
     if len(chart_df) > 18:
@@ -341,23 +627,177 @@ def build_chart(sim, recommended_price):
 
     bars = ""
     for _, row in chart_df.iterrows():
-        height = max(6, (row["expected_revenue"] / max_revenue) * 100)
+        height = max(8, (row["expected_revenue"] / max_revenue) * 120)
         is_best = abs(row["price"] - recommended_price) < 0.01
-        bar_class = "bar best" if is_best else "bar"
+        bar_color = "var(--accent)" if is_best else "#bae6fd"
 
         bars += f"""
-            <div class="bar-wrap" title="${row['price']} → ${row['expected_revenue']}">
-                <div class="{bar_class}" style="height:{height}%"></div>
-            </div>
+        <div style="flex:1; text-align:center;">
+            <div style="
+                height:{height}px;
+                background:{bar_color};
+                border-radius:8px 8px 0 0;
+                margin-bottom:6px;
+            " title="{price(row['price'])} → {money(row['expected_revenue'])}"></div>
+            <div style="font-size:11px; color:var(--muted);">{price(row['price'])}</div>
+        </div>
         """
 
     return f"""
-        <div class="chart">{bars}</div>
-        <div class="chart-labels">
-            <span>{price(chart_df['price'].min())}</span>
-            <span>Revenue simulation across price points</span>
-            <span>{price(chart_df['price'].max())}</span>
+    <div style="
+        display:flex;
+        align-items:end;
+        gap:6px;
+        height:160px;
+        border-bottom:1px solid var(--border);
+        margin-top:12px;
+        padding-top:20px;
+    ">
+        {bars}
+    </div>
+    <p class="small-note">
+        Blue bar = recommended price with strongest expected revenue.
+    </p>
+    """
+
+def render_dashboard(result):
+    summary = result["market_summary"]
+    rec = result["recommendation"]
+    sim = result["simulation"].copy()
+    products_df = result["products"].copy()
+    parsed_prompt = result.get("parsed_prompt", {})
+
+    product_query = result.get("product_query", "Product")
+    objective = parsed_prompt.get("objective", "maximize_revenue")
+    audience = parsed_prompt.get("audience")
+    positioning = parsed_prompt.get("positioning")
+
+    sim_html = make_simulation_table(sim)
+    chart_html = make_revenue_chart(sim, rec["recommended_price"])
+    products_html = make_products_table(products_df)
+
+    return f"""
+    <div class="card">
+        <h2>Live Pricing Dashboard</h2>
+        <p class="small-note">Updates from the latest agent analysis.</p>
+
+        <div class="mini-card">
+            <div class="metric-label">Product Search</div>
+            <div class="metric-value">{safe_text(product_query.title())}</div>
+            <p>
+                Objective: <strong>{safe_text(objective.replace("_", " ").title())}</strong><br>
+                Audience: <strong>{safe_text(audience or "Not specified")}</strong><br>
+                Positioning: <strong>{safe_text(positioning or "Not specified")}</strong>
+            </p>
         </div>
+
+        <div class="recommendation">
+            <h2>✅ Final Recommendation</h2>
+            <div class="recommendation-price">{price(rec["recommended_price"])}</div>
+            <p>
+                Charge <strong>{price(rec["recommended_price"])}</strong> based on the live competitor benchmark
+                and revenue simulation.
+            </p>
+            <p>
+                Expected revenue: <strong>{money(rec["expected_revenue"])}</strong><br>
+                Estimated conversion: <strong>{percent(rec["conversion_rate"])}</strong><br>
+                Market position: <strong>{safe_text(rec["market_position"])}</strong>
+            </p>
+        </div>
+
+        <div class="grid grid-3">
+            <div class="mini-card">
+                <div class="metric-label">Market Median</div>
+                <div class="metric-value">{price(summary["median_price"])}</div>
+            </div>
+            <div class="mini-card">
+                <div class="metric-label">Products Analyzed</div>
+                <div class="metric-value">{int(summary["num_products"])}</div>
+            </div>
+            <div class="mini-card">
+                <div class="metric-label">Price Range</div>
+                <div class="metric-value">{price(summary["min_price"])}–{price(summary["max_price"])}</div>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h3>Revenue vs Price</h3>
+            {chart_html}
+            {sim_html}
+        </div>
+
+        <div class="section-card">
+            <h3>Competitor Snapshot</h3>
+            {products_html}
+        </div>
+    </div>
+    """
+
+
+def render_results_page(category, result, history, session_id):
+    history_value = encode_history(history)
+    dashboard_html = render_dashboard(result)
+
+    suggestions = suggested_questions(result, history)
+
+    suggestion_buttons = "".join(
+        f"""
+        <form action="/ask" method="post" style="display:inline;">
+            <input type="hidden" name="category" value="{safe_text(category)}">
+            <input type="hidden" name="history" value="{history_value}">
+            <input type="hidden" name="session_id" value="{session_id}">
+            <input type="hidden" name="question" value="{safe_text(q)}">
+            <button class="chip" type="submit">{safe_text(q)}</button>
+        </form>
+        """
+        for q in suggestions
+    )
+
+    return f"""
+    <html>
+        <head>
+            <title>PricePilot</title>
+            {STYLE}
+        </head>
+        <body>
+            {render_topbar()}
+
+            <main class="app-container">
+                <section class="chat-panel">
+                    {render_history(history)}
+
+                    <div class="message-row">
+                        <div class="avatar">✦</div>
+                        <div class="bubble">
+                            <h2>Suggested next questions</h2>
+                            <div class="suggestions">
+                                {suggestion_buttons}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bottom-input">
+                        <form class="bottom-input-inner" action="/ask" method="post">
+                            <input type="hidden" name="category" value="{safe_text(category)}">
+                            <input type="hidden" name="history" value="{history_value}">
+                            <input type="hidden" name="session_id" value="{session_id}">
+                            <input
+                                type="text"
+                                name="question"
+                                placeholder="Ask a follow-up pricing question..."
+                                required
+                            />
+                            <button type="submit">Send</button>
+                        </form>
+                    </div>
+                </section>
+
+                <aside class="dashboard-panel">
+                    {dashboard_html}
+                </aside>
+            </main>
+        </body>
+    </html>
     """
 
 
@@ -370,75 +810,64 @@ def home():
             {STYLE}
         </head>
         <body>
-            <main class="page">
-                <section class="hero">
-                    <div class="badge">AI Pricing Strategy Agent</div>
-                    <h1>Find the price that maximizes revenue.</h1>
-                    <p>
-                        PricePilot benchmarks live product data, simulates demand across price points,
-                        and recommends a pricing strategy with expected revenue impact.
-                    </p>
+            {render_topbar()}
 
-                    <form class="search-card" action="/analyze" method="post">
-                        <div style="display:flex; flex-direction:column; flex:2;">
-                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Product Category</label>
-                            <input name="category" value="wireless headphones" required />
+            <main class="home-page">
+                <div class="message-row">
+                    <div class="avatar">✦</div>
+                    <div class="bubble">
+                        <h1>What should you charge?</h1>
+                        <p>
+                            Describe your product, audience, and pricing goal. PricePilot will search the market,
+                            simulate revenue, and recommend a pricing strategy.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="prompt-card">
+                    <form action="/analyze" method="post">
+                        <textarea
+                            name="category"
+                            placeholder="Example: What price should I charge for wireless headphones?"
+                            required
+                        >What price should I charge for wireless headphones?</textarea>
+
+                        <div style="display:flex; justify-content:flex-end; margin-top:12px;">
+                            <button type="submit">Analyze Pricing →</button>
                         </div>
-
-                        <div style="display:flex; flex-direction:column;">
-                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Monthly Shoppers</label>
-                            <input type="number" name="traffic" value="1000" min="100" />
-                        </div>
-
-                        <div style="display:flex; flex-direction:column;">
-                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Conversion Rate</label>
-                            <input type="number" name="conversion" value="0.08" step="0.01" min="0.01" max="0.2" />
-                        </div>
-
-                        <div style="display:flex; flex-direction:column;">
-                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Elasticity</label>
-                            <input type="number" name="elasticity" value="1.25" step="0.05" min="0.5" max="3" />
-                        </div>
-
-                        <div style="display:flex; flex-direction:column;">
-                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Strategic Objective</label>
-                            <select name="objective">
-                                <option value="maximize_revenue">Maximize Revenue</option>
-                                <option value="maximize_growth">Maximize Customer Growth</option>
-                                <option value="competitive_entry">Enter Market Competitively</option>
-                                <option value="premium_positioning">Premium Positioning</option>
-                            </select>
-                        </div>
-
-                        <button type="submit">Analyze Pricing</button>
                     </form>
 
                     <div class="examples">
-                        <a class="example-pill" href="#" onclick="fillExample('wireless headphones')">Wireless Headphones</a>
-                        <a class="example-pill" href="#" onclick="fillExample('protein powder')">Protein Powder</a>
-                        <a class="example-pill" href="#" onclick="fillExample('skincare')">Skincare</a>
-                    </div>
-                </section>
+                        <span class="chip" onclick="fillExample('What price should I charge for wireless headphones?')">
+                            What price should I charge for wireless headphones?
+                        </span>
 
-                <section class="section grid grid-3">
-                    <div class="card">
-                        <h3>1. Market Benchmarking</h3>
-                        <p>Pulls product prices and summarizes the current competitive landscape.</p>
+                        <span class="chip" onclick="fillExample('How should I price sustainable sneakers for eco-conscious millennials?')">
+                            How should I price sustainable sneakers for eco-conscious millennials?
+                        </span>
+
+                        <span class="chip" onclick="fillExample('I sell a budget standing desk for remote workers. What price helps me grow fast?')">
+                            I sell a budget standing desk for remote workers. What price helps me grow fast?
+                        </span>
+
+                        <span class="chip" onclick="fillExample('I sell premium skincare and want luxury positioning. What price should I charge?')">
+                            I sell premium skincare and want luxury positioning. What price should I charge?
+                        </span>
+
+                        <span class="chip" onclick="fillExample('How should I price a productivity SaaS tool with three tiers?')">
+                            How should I price a productivity SaaS tool with three tiers?
+                        </span>
                     </div>
-                    <div class="card">
-                        <h3>2. Revenue Simulation</h3>
-                        <p>Tests possible prices using conversion and demand assumptions.</p>
-                    </div>
-                    <div class="card">
-                        <h3>3. Strategy Recommendation</h3>
-                        <p>Selects the strongest price and explains the business tradeoff.</p>
-                    </div>
-                </section>
+
+                    <p class="small-note">
+                        You can include product, audience, goal, positioning, price range, COGS, or assumptions.
+                    </p>
+                </div>
             </main>
 
             <script>
                 function fillExample(value) {{
-                    document.querySelector('input[name="category"]').value = value;
+                    document.querySelector('textarea[name="category"]').value = value;
                 }}
             </script>
         </body>
@@ -447,297 +876,95 @@ def home():
 
 
 @app.post("/analyze", response_class=HTMLResponse)
-def analyze(
-    category: str = Form(...),
-    traffic: int = Form(1000),
-    conversion: float = Form(0.08),
-    elasticity: float = Form(1.25),
-    objective: str = Form("maximize_revenue"),
-):
-    result = run_pricing_agent(
-        category,
-        base_traffic=traffic,
-        base_conversion=conversion,
-        price_elasticity=elasticity,
-        objective=objective,
-    )
+def analyze(category: str = Form(...)):
+    try:
+        result = run_pricing_agent(category)
+    except Exception as e:
+        result = {"error": str(e)}
 
     if "error" in result:
         return f"""
         <html>
             <head>
-                <title>No Data Found</title>
+                <title>PricePilot</title>
                 {STYLE}
             </head>
             <body>
-                <main class="page">
-                    <div class="card error">
-                        <h1>No data found</h1>
-                        <p>{result["error"]}</p>
-                        <a class="button" href="/">Run another analysis</a>
+                {render_topbar()}
+                <main class="home-page">
+                    <div class="message-row user">
+                        <div class="user-bubble">{safe_text(category)}</div>
+                        <div class="avatar user-avatar">👤</div>
+                    </div>
+
+                    <div class="message-row">
+                        <div class="avatar">✦</div>
+                        <div class="bubble">
+                            <h2>I need a little more information.</h2>
+                            <p>{safe_text(result["error"])}</p>
+                            <a class="button" href="/">Try another prompt</a>
+                        </div>
                     </div>
                 </main>
             </body>
         </html>
         """
 
-    steps = result["steps"]
-    summary = result["market_summary"]
     rec = result["recommendation"]
-    explanation = result["explanation"]
-    explanation_html = markdown.markdown(explanation)
-    sim = result["simulation"].copy()
+    product_query = result.get("product_query", category)
 
-    objective_labels = {
-        "maximize_revenue": "Maximize Revenue",
-        "maximize_growth": "Maximize Customer Growth",
-        "competitive_entry": "Enter Market Competitively",
-        "premium_positioning": "Premium Positioning",
-    }
-    objective_label = objective_labels.get(objective, "Maximize Revenue")
-
-    best_price = rec["recommended_price"]
-    chart_html = build_chart(sim, best_price)
-
-    top_sim = sim.sort_values("expected_revenue", ascending=False).head(8)
-    top_sim_display = top_sim.rename(
-        columns={
-            "price": "Price",
-            "conversion_rate": "Conversion Rate",
-            "expected_customers": "Customers / Month",
-            "expected_revenue": "Revenue / Month",
-            "period": "Period",
-        }
+    summary_text = (
+        f"✅ **Recommendation:** Charge **{price(rec['recommended_price'])}** "
+        f"for **{product_query.title()}**.\n\n"
+        f"Estimated monthly revenue: **{money(rec['expected_revenue'])}**.  \n"
+        f"Estimated conversion: **{percent(rec['conversion_rate'])}**.  \n"
+        f"Market position: **{rec['market_position']}**."
     )
 
-    top_sim_display["Price"] = top_sim_display["Price"].apply(price)
-    top_sim_display["Conversion Rate"] = top_sim_display["Conversion Rate"].apply(percent)
-    top_sim_display["Customers / Month"] = top_sim_display["Customers / Month"].apply(lambda x: f"{float(x):,.0f}")
-    top_sim_display["Revenue / Month"] = top_sim_display["Revenue / Month"].apply(money)
-
-    sim_html = top_sim_display.to_html(index=False, classes="table", escape=False)
-
-    products_df = result["products"].copy()
-    cols = [
-        c for c in ["product_name", "name", "title", "price", "rating", "reviews"]
-        if c in products_df.columns
-    ]
-    products_df = products_df[cols].head(10)
-
-    if "price" in products_df.columns:
-        products_df["price"] = products_df["price"].apply(price)
-
-    if "rating" in products_df.columns:
-        products_df["rating"] = products_df["rating"].apply(
-            lambda x: f"{float(x):.1f}" if str(x) != "nan" else ""
-        )
-
-    products_html = products_df.to_html(index=False, classes="table", escape=False)
-
-    scenario_prices = [
-        max(sim["price"].min(), best_price * 0.85),
-        best_price,
-        min(sim["price"].max(), best_price * 1.15),
+    history = [
+        {"role": "user", "content": category},
+        {"role": "agent", "content": summary_text},
     ]
 
-    scenario_cards_html = ""
-    for label, price_point in zip(["Lower Price", "Recommended", "Higher Price"], scenario_prices):
-        closest_row = sim.iloc[(sim["price"] - price_point).abs().argsort()[:1]].iloc[0]
-        is_best = label == "Recommended"
-        card_class = "card scenario-card best" if is_best else "card scenario-card"
-        badge = '<div class="scenario-badge">Best Option</div>' if is_best else ""
+    session_id = str(uuid.uuid4())
+    RESULT_CACHE[session_id] = result
 
-        scenario_cards_html += f"""
-            <div class="{card_class}">
-                {badge}
-                <div class="metric-label">{label}</div>
-                <div class="metric-value">{price(closest_row["price"])}</div>
-                <div class="metric-subtitle">{money(closest_row["expected_revenue"])} monthly revenue</div>
-                <p>
-                    Conversion: {percent(closest_row["conversion_rate"])}<br>
-                    Customers/month: {float(closest_row["expected_customers"]):,.0f}
-                </p>
-            </div>
-        """
-
-    steps_html = "".join(
-        f"""
-        <li>
-            <strong>{step["action"]}</strong><br>
-            <span><b>Tool:</b> {step["tool"]}</span><br>
-            <span>{step["result"]}</span>
-        </li>
-        """
-        for step in steps
-    )
-
-    return f"""
-    <html>
-        <head>
-            <title>PricePilot Results</title>
-            {STYLE}
-        </head>
-        <body>
-            <main class="page">
-                <div class="hero-row">
-                    <div>
-                        <div class="query-label">Pricing analysis for</div>
-                        <div class="query-title">{category.title()}</div>
-                        <div class="metric-subtitle">Strategic objective: {objective_label}</div>
-                    </div>
-                    <a class="button" href="/">Run another analysis</a>
-                </div>
-
-                <section class="grid grid-4">
-                    <div class="card recommendation-card">
-                        <div class="metric-label">Recommended Price</div>
-                        <div class="recommended-price">{price(rec["recommended_price"])}</div>
-                        <span class="status-pill">{rec["market_position"]}</span>
-                    </div>
-
-                    <div class="card">
-                        <div class="metric-label">Expected Monthly Revenue</div>
-                        <div class="metric-value">{money(rec["expected_revenue"])}</div>
-                        <div class="metric-subtitle">Assumes {traffic:,} monthly shoppers</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="metric-label">Estimated Conversion</div>
-                        <div class="metric-value">{percent(rec["conversion_rate"])}</div>
-                        <div class="metric-subtitle">{float(rec["expected_customers"]):,.0f} customers/month</div>
-                    </div>
-
-                    <div class="card">
-                        <div class="metric-label">Market Median Price</div>
-                        <div class="metric-value">{price(summary["median_price"])}</div>
-                        <div class="metric-subtitle">
-                            Range: {price(summary["min_price"])} - {price(summary["max_price"])}
-                        </div>
-                    </div>
-                </section>
-
-                <section class="section card">
-                    <h2>Revenue Simulation</h2>
-                    <p>
-                        PricePilot simulated monthly revenue across possible prices and selected the
-                        price point based on the selected strategic objective.
-                    </p>
-                    {chart_html}
-                </section>
-
-                <section class="section card">
-                    <h2>Competitor Products</h2>
-                    <p>These are the real products used to benchmark pricing in this category.</p>
-                    {products_html}
-                </section>
-
-                <section class="section">
-                    <h2>Pricing Scenarios</h2>
-                    <div class="grid grid-3">
-                        {scenario_cards_html}
-                    </div>
-                </section>
-
-                <section class="section grid grid-3">
-                    <div class="card">
-                        <div class="metric-label">Products Analyzed</div>
-                        <div class="metric-value">{int(summary["num_products"])}</div>
-                    </div>
-                    <div class="card">
-                        <div class="metric-label">Average Price</div>
-                        <div class="metric-value">{price(summary["mean_price"])}</div>
-                    </div>
-                    <div class="card">
-                        <div class="metric-label">Price Spread</div>
-                        <div class="metric-value">{price(summary["max_price"] - summary["min_price"])}</div>
-                    </div>
-                </section>
-
-                <section class="section card">
-                    <h2>Business Explanation</h2>
-                    {explanation_html}
-                </section>
-
-                <section class="section card">
-                    <h2>Top Revenue Scenarios</h2>
-                    {sim_html}
-                </section>
-
-                <section class="section card">
-                    <h2>Ask a Pricing Consultant</h2>
-                    <p>Ask follow-up questions about strategy, risks, or pricing decisions.</p>
-
-                    <form action="/ask" method="post">
-                        <input
-                            type="text"
-                            name="question"
-                            placeholder="e.g., What if I want to maximize growth instead?"
-                            style="width:100%; margin-bottom:10px;"
-                            required
-                        />
-
-                        <input type="hidden" name="category" value="{category}">
-                        <input type="hidden" name="traffic" value="{traffic}">
-                        <input type="hidden" name="conversion" value="{conversion}">
-                        <input type="hidden" name="elasticity" value="{elasticity}">
-                        <input type="hidden" name="objective" value="{objective}">
-
-                        <button type="submit">Ask Consultant</button>
-                    </form>
-                </section>
-
-                <section class="section card">
-                    <h2>Agent Workflow</h2>
-                    <ul class="steps">{steps_html}</ul>
-                </section>
-            </main>
-        </body>
-    </html>
-    """
+    return render_results_page(category, result, history, session_id)
 
 
 @app.post("/ask", response_class=HTMLResponse)
 def ask(
     question: str = Form(...),
     category: str = Form(...),
-    traffic: int = Form(1000),
-    conversion: float = Form(0.08),
-    elasticity: float = Form(1.25),
-    objective: str = Form("maximize_revenue"),
+    history: str = Form(""),
+    session_id: str = Form(""),
 ):
-    result = run_pricing_agent(
-        category,
-        base_traffic=traffic,
-        base_conversion=conversion,
-        price_elasticity=elasticity,
-        objective=objective,
-    )
+    chat_history = decode_history(history)
+    chat_history.append({"role": "user", "content": question})
+
+    result = RESULT_CACHE.get(session_id)
+
+    if result is None:
+        answer = "I lost the previous pricing analysis. Please start a new analysis."
+        chat_history.append({"role": "agent", "content": answer})
+        return render_results_page(category, run_pricing_agent(category), chat_history, session_id)
 
     answer = generate_business_explanation(
-        category=category,
+        category=result.get("product_query", category),
         market_summary=result["market_summary"],
         recommendation=result["recommendation"],
         question=question,
-        objective=objective,
     )
 
-    answer_html = markdown.markdown(answer)
+    final_answer = generate_business_explanation(
+        category=result.get("product_query", category),
+        market_summary=result["market_summary"],
+        recommendation=result["recommendation"],
+        question=f"Give a one-sentence direct final answer to this question: {question}",
+    )
 
-    return f"""
-    <html>
-        <head>
-            <title>Consultant Response</title>
-            {STYLE}
-        </head>
-        <body>
-            <main class="page">
-                <div class="card">
-                    <h2>Consultant Response</h2>
-                    <div>{answer_html}</div>
-                    <br>
-                    <a class="button" href="/">Back</a>
-                </div>
-            </main>
-        </body>
-    </html>
-    """
+    formatted_answer = f"**Final answer:** {final_answer}\n\n{answer}"
+
+    chat_history.append({"role": "agent", "content": formatted_answer})
+
+    return render_results_page(category, result, chat_history, session_id)

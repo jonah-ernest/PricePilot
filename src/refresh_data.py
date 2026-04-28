@@ -1,18 +1,11 @@
 import os
 import requests
-import pandas as pd
 from datetime import date
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-
-CATEGORIES = [
-    "protein powder",
-    "skincare",
-    "wireless headphones",
-]
 
 
 def fetch_google_shopping_results(category, limit=30):
@@ -35,6 +28,7 @@ def fetch_google_shopping_results(category, limit=30):
 
     for item in results[:limit]:
         price_text = item.get("price", "")
+
         price = (
             price_text.replace("$", "")
             .replace(",", "")
@@ -45,7 +39,7 @@ def fetch_google_shopping_results(category, limit=30):
 
         try:
             price = float(price)
-        except:
+        except Exception:
             continue
 
         if price < 3 or price > 300:
@@ -63,21 +57,3 @@ def fetch_google_shopping_results(category, limit=30):
         })
 
     return rows
-
-
-def refresh_data():
-    all_rows = []
-
-    for category in CATEGORIES:
-        print(f"Fetching data for: {category}")
-        rows = fetch_google_shopping_results(category)
-        all_rows.extend(rows)
-
-    df = pd.DataFrame(all_rows)
-    df.to_csv("data/products.csv", index=False)
-
-    print(f"Saved {len(df)} rows to data/products.csv")
-
-
-if __name__ == "__main__":
-    refresh_data()

@@ -1,4 +1,5 @@
 import os
+import json
 from groq import Groq
 
 
@@ -67,3 +68,40 @@ Explain why this price is optimal and what it means for the business.
 
     except Exception as e:
         return f"[ERROR CALLING GROQ] {str(e)}"
+
+
+def generate_followup_suggestions(category, market_summary, recommendation, objective=None):
+    prompt = f"""
+You are a pricing strategy consultant.
+
+Generate 4 short follow-up questions the user might want to ask next.
+
+Context:
+Product: {category}
+Objective: {objective}
+Market summary: {market_summary}
+Recommendation: {recommendation}
+
+Rules:
+- Return ONLY a JSON list of 4 strings.
+- Questions should be specific to this product and pricing situation.
+- Keep each under 12 words.
+"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+    )
+
+    raw = response.choices[0].message.content.strip()
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        return [
+            "What are the risks of this price?",
+            "How would growth pricing change this?",
+            "What competitors matter most?",
+            "Should I launch with a discount?",
+        ]
