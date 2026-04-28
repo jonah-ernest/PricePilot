@@ -1,10 +1,15 @@
+import pandas as pd
+
 from src.data_loader import load_product_data, filter_by_category
 from src.benchmarking import summarize_market
 from src.simulation import simulate_revenue
 from src.recommendation import recommend_price
 from src.llm_reasoning import generate_business_explanation
 from src.refresh_data import fetch_google_shopping_results
-import pandas as pd
+
+
+def log_step(steps, action, tool, result):
+    steps.append({"action": action, "tool": tool, "result": result})
 
 
 def fetch_and_store_category(category):
@@ -22,46 +27,111 @@ def fetch_and_store_category(category):
         combined = new_df
 
     combined.to_csv("data/products.csv", index=False)
-
     return new_df
 
 
-def run_pricing_agent(category):
+def run_pricing_agent(
+    category,
+    base_traffic=1000,
+    base_conversion=0.08,
+    price_elasticity=1.25,
+    objective="maximize_revenue",
+):
     category = category.lower().strip()
     steps = []
 
-    steps.append("Loaded real product pricing dataset.")
+    log_step(
+        steps,
+        "Interpret user request",
+        "Input parser",
+        f"User wants a pricing strategy for: {category}",
+    )
+
     df = load_product_data()
 
-    steps.append(f"Filtered products for category: {category}.")
+    log_step(
+        steps,
+        "Load pricing data",
+        "Local CSV data loader",
+        "Loaded stored product pricing dataset.",
+    )
+
     category_df = filter_by_category(df, category)
 
     if category_df.empty:
-        steps.append("No local data found. Fetching real product data from API...")
+        log_step(
+            steps,
+            "Decide whether external data is needed",
+            "Agent decision logic",
+            "No local products found, so live market data will be fetched.",
+        )
+
         category_df = fetch_and_store_category(category)
 
         if category_df is None or category_df.empty:
             return {
                 "error": "No product data found even after API fetch.",
-                "steps": steps
+                "steps": steps,
             }
 
-        steps.append("Fetched real data and updated dataset.")
+        log_step(
+            steps,
+            "Fetch live competitor data",
+            "Google Shopping / SerpAPI tool",
+            f"Fetched {len(category_df)} competitor products and updated the dataset.",
+        )
+    else:
+        log_step(
+            steps,
+            "Use existing benchmark data",
+            "Category filter",
+            f"Found {len(category_df)} matching products in the local dataset.",
+        )
 
-    steps.append("Calculated market pricing benchmarks.")
     market_summary = summarize_market(category_df)
 
-    steps.append("Simulated revenue across possible price points.")
-    simulation_df = simulate_revenue(market_summary)
+    log_step(
+        steps,
+        "Benchmark the market",
+        "Pricing benchmark tool",
+        "Calculated market pricing statistics.",
+    )
 
-    steps.append("Selected the price with the highest expected revenue.")
-    recommendation = recommend_price(simulation_df, market_summary)
+    simulation_df = simulate_revenue(
+        market_summary,
+        base_traffic=base_traffic,
+        base_conversion=base_conversion,
+        price_elasticity=price_elasticity,
+    )
 
-    steps.append("Generated business explanation.")
+    log_step(
+        steps,
+        "Simulate revenue scenarios",
+        "Revenue simulation tool",
+        f"Used {base_traffic:,} monthly shoppers, {base_conversion:.1%} base conversion, and {price_elasticity} price elasticity.",
+    )
+
+    recommendation = recommend_price(simulation_df, market_summary, objective)
+
+    log_step(
+        steps,
+        "Choose recommended price",
+        "Pricing recommendation tool",
+        "Selected the price point with the highest expected monthly revenue.",
+    )
+
     explanation = generate_business_explanation(
         category=category,
         market_summary=market_summary,
-        recommendation=recommendation
+        recommendation=recommendation,
+        objective=objective,
+    )
+
+    log_step(
+        steps,
+        "Align recommendation with business objective",
+        "Strategy objective selector",
+        f"Optimizing pricing strategy for objective: {objective}.",
     )
 
     return {
@@ -70,5 +140,10 @@ def run_pricing_agent(category):
         "market_summary": market_summary,
         "simulation": simulation_df,
         "recommendation": recommendation,
-        "explanation": explanation
+        "explanation": explanation,
+        "inputs": {
+            "base_traffic": base_traffic,
+            "base_conversion": base_conversion,
+            "price_elasticity": price_elasticity,
+        },
     }

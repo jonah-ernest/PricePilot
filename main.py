@@ -1,5 +1,6 @@
 import os
 import sys
+import markdown
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -7,6 +8,7 @@ from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 
 from src.agent import run_pricing_agent
+from src.llm_reasoning import generate_business_explanation
 
 app = FastAPI(title="PricePilot")
 
@@ -27,9 +29,7 @@ STYLE = """
         --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
     }
 
-    * {
-        box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     body {
         margin: 0;
@@ -54,8 +54,6 @@ STYLE = """
 
     .badge {
         display: inline-flex;
-        align-items: center;
-        gap: 8px;
         background: rgba(255, 255, 255, 0.14);
         border: 1px solid rgba(255, 255, 255, 0.2);
         padding: 8px 14px;
@@ -71,15 +69,8 @@ STYLE = """
         letter-spacing: -1.4px;
     }
 
-    h2 {
-        margin: 0 0 16px;
-        font-size: 24px;
-    }
-
-    h3 {
-        margin: 0 0 8px;
-        font-size: 16px;
-    }
+    h2 { margin: 0 0 16px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 16px; }
 
     p {
         color: var(--muted);
@@ -99,10 +90,11 @@ STYLE = """
         padding: 10px;
         display: flex;
         gap: 10px;
-        max-width: 720px;
+        max-width: 950px;
+        align-items: end;
     }
 
-    input {
+    input, select {
         flex: 1;
         border: none;
         outline: none;
@@ -124,9 +116,7 @@ STYLE = """
         display: inline-block;
     }
 
-    button:hover, .button:hover {
-        background: var(--accent-dark);
-    }
+    button:hover, .button:hover { background: var(--accent-dark); }
 
     .examples {
         margin-top: 22px;
@@ -145,22 +135,15 @@ STYLE = """
         font-size: 14px;
     }
 
-    .section {
-        margin-top: 28px;
-    }
+    .section { margin-top: 28px; }
 
     .grid {
         display: grid;
         gap: 18px;
     }
 
-    .grid-4 {
-        grid-template-columns: repeat(4, 1fr);
-    }
-
-    .grid-3 {
-        grid-template-columns: repeat(3, 1fr);
-    }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
 
     .card {
         background: var(--card);
@@ -196,10 +179,7 @@ STYLE = """
         margin-bottom: 24px;
     }
 
-    .query-label {
-        color: var(--muted);
-        margin-bottom: 6px;
-    }
+    .query-label { color: var(--muted); margin-bottom: 6px; }
 
     .query-title {
         font-size: 36px;
@@ -287,9 +267,7 @@ STYLE = """
         color: #344054;
     }
 
-    .steps li:last-child {
-        border-bottom: none;
-    }
+    .steps li:last-child { border-bottom: none; }
 
     .chart {
         display: flex;
@@ -314,9 +292,7 @@ STYLE = """
         background: #93c5fd;
     }
 
-    .bar.best {
-        background: #2563eb;
-    }
+    .bar.best { background: #2563eb; }
 
     .chart-labels {
         display: flex;
@@ -333,25 +309,11 @@ STYLE = """
     }
 
     @media (max-width: 900px) {
-        .grid-4, .grid-3 {
-            grid-template-columns: 1fr;
-        }
-
-        .hero {
-            padding: 32px;
-        }
-
-        h1 {
-            font-size: 40px;
-        }
-
-        .search-card {
-            flex-direction: column;
-        }
-
-        .hero-row {
-            flex-direction: column;
-        }
+        .grid-4, .grid-3 { grid-template-columns: 1fr; }
+        .hero { padding: 32px; }
+        h1 { font-size: 40px; }
+        .search-card { flex-direction: column; align-items: stretch; }
+        .hero-row { flex-direction: column; }
     }
 </style>
 """
@@ -418,12 +380,36 @@ def home():
                     </p>
 
                     <form class="search-card" action="/analyze" method="post">
-                        <input
-                            name="category"
-                            placeholder="Try wireless headphones, skincare, protein powder..."
-                            value="wireless headphones"
-                            required
-                        />
+                        <div style="display:flex; flex-direction:column; flex:2;">
+                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Product Category</label>
+                            <input name="category" value="wireless headphones" required />
+                        </div>
+
+                        <div style="display:flex; flex-direction:column;">
+                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Monthly Shoppers</label>
+                            <input type="number" name="traffic" value="1000" min="100" />
+                        </div>
+
+                        <div style="display:flex; flex-direction:column;">
+                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Conversion Rate</label>
+                            <input type="number" name="conversion" value="0.08" step="0.01" min="0.01" max="0.2" />
+                        </div>
+
+                        <div style="display:flex; flex-direction:column;">
+                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Elasticity</label>
+                            <input type="number" name="elasticity" value="1.25" step="0.05" min="0.5" max="3" />
+                        </div>
+
+                        <div style="display:flex; flex-direction:column;">
+                            <label style="font-size:12px; color:#667085; margin-bottom:4px;">Strategic Objective</label>
+                            <select name="objective">
+                                <option value="maximize_revenue">Maximize Revenue</option>
+                                <option value="maximize_growth">Maximize Customer Growth</option>
+                                <option value="competitive_entry">Enter Market Competitively</option>
+                                <option value="premium_positioning">Premium Positioning</option>
+                            </select>
+                        </div>
+
                         <button type="submit">Analyze Pricing</button>
                     </form>
 
@@ -461,8 +447,20 @@ def home():
 
 
 @app.post("/analyze", response_class=HTMLResponse)
-def analyze(category: str = Form(...)):
-    result = run_pricing_agent(category)
+def analyze(
+    category: str = Form(...),
+    traffic: int = Form(1000),
+    conversion: float = Form(0.08),
+    elasticity: float = Form(1.25),
+    objective: str = Form("maximize_revenue"),
+):
+    result = run_pricing_agent(
+        category,
+        base_traffic=traffic,
+        base_conversion=conversion,
+        price_elasticity=elasticity,
+        objective=objective,
+    )
 
     if "error" in result:
         return f"""
@@ -487,7 +485,16 @@ def analyze(category: str = Form(...)):
     summary = result["market_summary"]
     rec = result["recommendation"]
     explanation = result["explanation"]
+    explanation_html = markdown.markdown(explanation)
     sim = result["simulation"].copy()
+
+    objective_labels = {
+        "maximize_revenue": "Maximize Revenue",
+        "maximize_growth": "Maximize Customer Growth",
+        "competitive_entry": "Enter Market Competitively",
+        "premium_positioning": "Premium Positioning",
+    }
+    objective_label = objective_labels.get(objective, "Maximize Revenue")
 
     best_price = rec["recommended_price"]
     chart_html = build_chart(sim, best_price)
@@ -510,6 +517,23 @@ def analyze(category: str = Form(...)):
 
     sim_html = top_sim_display.to_html(index=False, classes="table", escape=False)
 
+    products_df = result["products"].copy()
+    cols = [
+        c for c in ["product_name", "name", "title", "price", "rating", "reviews"]
+        if c in products_df.columns
+    ]
+    products_df = products_df[cols].head(10)
+
+    if "price" in products_df.columns:
+        products_df["price"] = products_df["price"].apply(price)
+
+    if "rating" in products_df.columns:
+        products_df["rating"] = products_df["rating"].apply(
+            lambda x: f"{float(x):.1f}" if str(x) != "nan" else ""
+        )
+
+    products_html = products_df.to_html(index=False, classes="table", escape=False)
+
     scenario_prices = [
         max(sim["price"].min(), best_price * 0.85),
         best_price,
@@ -517,7 +541,6 @@ def analyze(category: str = Form(...)):
     ]
 
     scenario_cards_html = ""
-
     for label, price_point in zip(["Lower Price", "Recommended", "Higher Price"], scenario_prices):
         closest_row = sim.iloc[(sim["price"] - price_point).abs().argsort()[:1]].iloc[0]
         is_best = label == "Recommended"
@@ -529,9 +552,7 @@ def analyze(category: str = Form(...)):
                 {badge}
                 <div class="metric-label">{label}</div>
                 <div class="metric-value">{price(closest_row["price"])}</div>
-                <div class="metric-subtitle">
-                    {money(closest_row["expected_revenue"])} monthly revenue
-                </div>
+                <div class="metric-subtitle">{money(closest_row["expected_revenue"])} monthly revenue</div>
                 <p>
                     Conversion: {percent(closest_row["conversion_rate"])}<br>
                     Customers/month: {float(closest_row["expected_customers"]):,.0f}
@@ -539,7 +560,16 @@ def analyze(category: str = Form(...)):
             </div>
         """
 
-    steps_html = "".join(f"<li>{step}</li>" for step in steps)
+    steps_html = "".join(
+        f"""
+        <li>
+            <strong>{step["action"]}</strong><br>
+            <span><b>Tool:</b> {step["tool"]}</span><br>
+            <span>{step["result"]}</span>
+        </li>
+        """
+        for step in steps
+    )
 
     return f"""
     <html>
@@ -553,6 +583,7 @@ def analyze(category: str = Form(...)):
                     <div>
                         <div class="query-label">Pricing analysis for</div>
                         <div class="query-title">{category.title()}</div>
+                        <div class="metric-subtitle">Strategic objective: {objective_label}</div>
                     </div>
                     <a class="button" href="/">Run another analysis</a>
                 </div>
@@ -567,7 +598,7 @@ def analyze(category: str = Form(...)):
                     <div class="card">
                         <div class="metric-label">Expected Monthly Revenue</div>
                         <div class="metric-value">{money(rec["expected_revenue"])}</div>
-                        <div class="metric-subtitle">Assumes 1,000 monthly shoppers</div>
+                        <div class="metric-subtitle">Assumes {traffic:,} monthly shoppers</div>
                     </div>
 
                     <div class="card">
@@ -589,9 +620,15 @@ def analyze(category: str = Form(...)):
                     <h2>Revenue Simulation</h2>
                     <p>
                         PricePilot simulated monthly revenue across possible prices and selected the
-                        price point with the strongest expected revenue.
+                        price point based on the selected strategic objective.
                     </p>
                     {chart_html}
+                </section>
+
+                <section class="section card">
+                    <h2>Competitor Products</h2>
+                    <p>These are the real products used to benchmark pricing in this category.</p>
+                    {products_html}
                 </section>
 
                 <section class="section">
@@ -618,7 +655,7 @@ def analyze(category: str = Form(...)):
 
                 <section class="section card">
                     <h2>Business Explanation</h2>
-                    <p>{explanation}</p>
+                    {explanation_html}
                 </section>
 
                 <section class="section card">
@@ -627,11 +664,79 @@ def analyze(category: str = Form(...)):
                 </section>
 
                 <section class="section card">
-                    <h2>Agent Workflow</h2>
-                    <ul class="steps">
-                        {steps_html}
-                    </ul>
+                    <h2>Ask a Pricing Consultant</h2>
+                    <p>Ask follow-up questions about strategy, risks, or pricing decisions.</p>
+
+                    <form action="/ask" method="post">
+                        <input
+                            type="text"
+                            name="question"
+                            placeholder="e.g., What if I want to maximize growth instead?"
+                            style="width:100%; margin-bottom:10px;"
+                            required
+                        />
+
+                        <input type="hidden" name="category" value="{category}">
+                        <input type="hidden" name="traffic" value="{traffic}">
+                        <input type="hidden" name="conversion" value="{conversion}">
+                        <input type="hidden" name="elasticity" value="{elasticity}">
+                        <input type="hidden" name="objective" value="{objective}">
+
+                        <button type="submit">Ask Consultant</button>
+                    </form>
                 </section>
+
+                <section class="section card">
+                    <h2>Agent Workflow</h2>
+                    <ul class="steps">{steps_html}</ul>
+                </section>
+            </main>
+        </body>
+    </html>
+    """
+
+
+@app.post("/ask", response_class=HTMLResponse)
+def ask(
+    question: str = Form(...),
+    category: str = Form(...),
+    traffic: int = Form(1000),
+    conversion: float = Form(0.08),
+    elasticity: float = Form(1.25),
+    objective: str = Form("maximize_revenue"),
+):
+    result = run_pricing_agent(
+        category,
+        base_traffic=traffic,
+        base_conversion=conversion,
+        price_elasticity=elasticity,
+        objective=objective,
+    )
+
+    answer = generate_business_explanation(
+        category=category,
+        market_summary=result["market_summary"],
+        recommendation=result["recommendation"],
+        question=question,
+        objective=objective,
+    )
+
+    answer_html = markdown.markdown(answer)
+
+    return f"""
+    <html>
+        <head>
+            <title>Consultant Response</title>
+            {STYLE}
+        </head>
+        <body>
+            <main class="page">
+                <div class="card">
+                    <h2>Consultant Response</h2>
+                    <div>{answer_html}</div>
+                    <br>
+                    <a class="button" href="/">Back</a>
+                </div>
             </main>
         </body>
     </html>
