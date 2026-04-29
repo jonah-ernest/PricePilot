@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 def simulate_revenue(
     market_summary,
     base_traffic=1000,
@@ -29,18 +28,15 @@ def simulate_revenue(
             conversion_rate *= (median_price / price) ** 0.8
 
         conversion_rate = min(max(conversion_rate, 0.005), 0.20)
-
         expected_customers = base_traffic * conversion_rate
         expected_revenue = expected_customers * price
 
-        rows.append(
-            {
-                "price": round(price, 2),
-                "conversion_rate": round(conversion_rate, 4),
-                "expected_customers": round(expected_customers, 0),
-                "expected_revenue": round(expected_revenue, 2),
-                "period": period,
-            }
-        )
+        rows.append({
+            "price": round(price, 2),
+            "conversion_rate": round(conversion_rate, 4),
+            "expected_customers": round(expected_customers, 0),
+            "expected_revenue": round(expected_revenue, 2),
+            "period": period,
+        })
 
     return pd.DataFrame(rows)
