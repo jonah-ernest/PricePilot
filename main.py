@@ -449,6 +449,72 @@ STYLE = """
         line-height: 1.3;
     }
 
+    .strategy-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+        margin: 24px 0;
+    }
+
+    .strategy-card {
+        border: 1px solid #dbe4ef;
+        border-radius: 18px;
+        padding: 22px;
+        background: #ffffff;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    .strategy-title {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 13px;
+        font-weight: 800;
+        color: #64748b;
+    }
+
+    .strategy-price {
+        font-size: 34px;
+        font-weight: 900;
+        margin: 12px 0 18px;
+        color: #0f172a;
+    }
+
+    .strategy-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+
+    .strategy-metrics span {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .strategy-metrics strong {
+        display: block;
+        font-size: 15px;
+        color: #0f172a;
+    }
+
+    .strategy-card p {
+        color: #64748b;
+        margin: 0;
+    }
+
+    .workflow-box {
+        background: #f8fafc;
+        border: 1px solid #dbe4ef;
+        border-radius: 14px;
+        padding: 16px;
+    }
+    .workflow-step {
+        margin-bottom: 12px;
+    }
+
     @media (max-width: 900px) {
         .app-container {
             grid-template-columns: 1fr;
@@ -652,6 +718,75 @@ def make_revenue_chart(sim, recommended_price):
     </p>
     """
 
+def make_strategy_cards(sim):
+    sim = sim.copy()
+
+    max_revenue_row = sim.loc[sim["expected_revenue"].idxmax()]
+    max_growth_row = sim.loc[sim["expected_customers"].idxmax()]
+
+    sim["rev_norm"] = sim["expected_revenue"] / sim["expected_revenue"].max()
+    sim["conv_norm"] = sim["conversion_rate"] / sim["conversion_rate"].max()
+    sim["balance_score"] = 0.3 * sim["rev_norm"] + 0.7 * sim["conv_norm"]
+
+    balanced_row = sim.loc[sim["balance_score"].idxmax()]
+
+    cards = [
+        ("Balanced", balanced_row, "Balance demand and revenue"),
+        ("Penetration", max_growth_row, "Attract more initial customers"),
+        ("Max Revenue", max_revenue_row, "Highest modeled monthly revenue"),
+    ]
+
+    html_cards = ""
+
+    for title, row, subtitle in cards:
+        html_cards += f"""
+        <div class="strategy-card">
+            <div class="strategy-title">{title}</div>
+            <div class="strategy-price">{money(row["price"])}</div>
+            <div class="strategy-metrics">
+                <div><span>Conv.</span><strong>{percent(row["conversion_rate"])}</strong></div>
+                <div><span>Units/Mo</span><strong>{int(row["expected_customers"])}</strong></div>
+                <div><span>Revenue</span><strong>{money(row["expected_revenue"])}</strong></div>
+            </div>
+            <p>{subtitle}</p>
+        </div>
+        """
+
+    return f'<div class="strategy-grid">{html_cards}</div>'
+
+def make_workflow_html(result):
+    product_query = result.get("product_query", "product")
+    parsed_prompt = result.get("parsed_prompt", {})
+    objective = parsed_prompt.get("objective", "maximize_revenue")
+    num_products = result["market_summary"]["num_products"]
+
+    steps = [
+        ("Interpret user request", "Input parser", f"User wants a pricing strategy for: {product_query}."),
+        ("Load pricing data", "Scraper / dataset loader", "Collected product prices and competitor data."),
+        ("Filter competitors", "Category filter", f"Found {int(num_products)} relevant products."),
+        ("Benchmark market", "Pricing benchmark tool", "Calculated market median, minimum, and maximum prices."),
+        ("Simulate revenue scenarios", "Revenue simulation tool", "Modeled price, conversion, customers, and expected revenue."),
+        ("Choose recommended price", "Recommendation tool", f"Selected price based on objective: {objective}."),
+        ("Explain strategy", "Gemini reasoning layer", "Generated a concise business explanation and follow-up suggestions."),
+    ]
+
+    rows = ""
+    for title, tool, detail in steps:
+        rows += f"""
+        <div class="workflow-step">
+            <strong>{safe_text(title)}</strong><br>
+            <span>Tool: {safe_text(tool)}</span><br>
+            <p>{safe_text(detail)}</p>
+        </div>
+        """
+
+    return f"""
+    <div class="workflow-box">
+        <h3>How PricePilot works</h3>
+        {rows}
+    </div>
+    """
+    
 def render_dashboard(result):
     summary = result["market_summary"]
     rec = result["recommendation"]
@@ -668,6 +803,8 @@ def render_dashboard(result):
     sim_html = make_simulation_table(sim)
     chart_html = make_revenue_chart(sim, rec["recommended_price"])
     products_html = make_products_table(products_df)
+    strategy_cards_html = make_strategy_cards(sim)
+    workflow_html = make_workflow_html(result)
 
     return f"""
     <div class="card">
@@ -712,7 +849,9 @@ def render_dashboard(result):
 
         <div class="section-card">
             <h3>Why this price works</h3>
-            {markdown.markdown(explanation.strip(), extensions=["extra"])}
+            <div class="agent-answer">
+                {markdown.markdown(explanation.strip(), extensions=["extra"])}
+            </div>
         </div>
 
         <div class="grid grid-3">
@@ -733,13 +872,27 @@ def render_dashboard(result):
         <div class="section-card">
             <h3>Revenue Curve</h3>
             {chart_html}
+            <h3>Alternative Pricing Strategies</h3>
+            <p class="small-note">Compare growth, balanced, and revenue-maximizing options.</p>
+            {strategy_cards_html}
             <h3>Top Price Scenarios</h3>
             {sim_html}
         </div>
+        
 
         <div class="section-card">
             <h3>Competitor Snapshot</h3>
             {products_html}
+        </div>
+    </div>
+
+    <div class="section-card">
+        <button type="button" onclick="toggleWorkflow()" class="chip" id="workflow-btn">
+            Show agent workflow
+        </button>
+
+        <div id="workflow" style="display:none; margin-top:12px;">
+            {workflow_html}
         </div>
     </div>
     """
@@ -807,6 +960,22 @@ def render_results_page(category, result, history, session_id):
                     {dashboard_html}
                 </aside>
             </main>
+            <script>
+                function toggleWorkflow() {{
+                    const el = document.getElementById("workflow");
+                    const btn = document.getElementById("workflow-btn");
+
+                    if (!el) return;
+
+                    if (el.style.display === "none") {{
+                        el.style.display = "block";
+                        if (btn) btn.innerText = "Hide agent workflow";
+                    }} else {{
+                        el.style.display = "none";
+                        if (btn) btn.innerText = "Show agent workflow";
+                    }}
+                }}
+            </script>
         </body>
     </html>
     """
@@ -879,6 +1048,27 @@ def home():
             <script>
                 function fillExample(value) {{
                     document.querySelector('textarea[name="category"]').value = value;
+                }}
+            </script>
+
+            <script>
+                function fillExample(value) {{
+                    document.querySelector('textarea[name="category"]').value = value;
+                }}
+
+                function toggleWorkflow() {{
+                    const el = document.getElementById("workflow");
+                    const btn = document.getElementById("workflow-btn");
+
+                    if (!el) return;
+
+                    if (el.style.display === "none") {{
+                        el.style.display = "block";
+                        btn.innerText = "Hide agent workflow";
+                    }} else {{
+                        el.style.display = "none";
+                        btn.innerText = "Show agent workflow";
+                    }}
                 }}
             </script>
         </body>
@@ -959,11 +1149,24 @@ def ask(
         chat_history.append({"role": "agent", "content": answer})
         return render_results_page(category, run_pricing_agent(category), chat_history, session_id)
 
+    original_objective = result.get("parsed_prompt", {}).get("objective", "maximize_revenue")
+
+    q = question.lower()
+
+    if any(word in q for word in ["growth", "customers", "acquire", "initial", "volume"]):
+        objective = "maximize_growth"
+    elif any(word in q for word in ["premium", "high-end", "luxury"]):
+        objective = "premium_positioning"
+    elif any(word in q for word in ["competitive", "market", "entry"]):
+        objective = "competitive_entry"
+    else:
+        objective = original_objective
+
     answer = generate_business_explanation(
         category=result.get("product_query", category),
         market_summary=result["market_summary"],
         recommendation=result["recommendation"],
-        objective=result.get("parsed_prompt", {}).get("objective", "maximize_revenue"),
+        objective=objective,
         question=question,
     )
 
