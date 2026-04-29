@@ -82,11 +82,30 @@ STYLE = """
         padding: 36px 22px 120px;
     }
 
+    .bottom-input {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 40%;   /* match chat panel width */
+        background: var(--bg);
+        border-top: 1px solid var(--border);
+        padding: 14px 18px;
+        z-index: 100;
+    }
+
+    .message-row:last-of-type {
+        margin-bottom: 160px;
+    }
+
     .chat-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-bottom: 160px;  /* increase this */
+        padding-bottom: 300px !important;
+    }
+
+    .suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding-bottom: 110px;
     }
 
     .dashboard-panel {
@@ -313,7 +332,7 @@ STYLE = """
 
     .app-container {
         display: grid;
-        grid-template-columns: 48% 52%;
+        grid-template-columns: 40% 60%;
         gap: 20px;
         height: calc(100vh - 74px);
         padding: 18px;
@@ -324,9 +343,7 @@ STYLE = """
         min-width: 0;
         height: 100%;
         overflow-y: auto;
-        padding-bottom: 24px;
-        display: flex;
-        flex-direction: column;
+        padding-bottom: 140px;  /* space for fixed input */
     }
 
     .dashboard-panel {
@@ -336,20 +353,11 @@ STYLE = """
         padding-right: 4px;
     }
 
-    .bottom-input {
-        position: sticky;
-        bottom: 0;
-        background: var(--bg);
-        border-top: 1px solid var(--border);
-        padding: 12px 0 4px;
-        margin-top: auto;
-        z-index: 20;
-    }
-
     .bottom-input-inner {
         display: flex;
         gap: 10px;
         align-items: center;
+        max-width: 100%;
     }
 
     .bottom-input input {
@@ -405,22 +413,6 @@ STYLE = """
         border-left: 5px solid var(--green);
         padding: 12px 14px;
         border-radius: 12px;
-    }
-
-    .app-container {
-        display: grid;
-        grid-template-columns: 48% 52%;
-        gap: 20px;
-        height: calc(100vh - 74px);
-        padding: 18px;
-        overflow: hidden;
-    }
-
-    .chat-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-bottom: 110px;
     }
 
     .dashboard-panel {
@@ -656,13 +648,14 @@ def make_revenue_chart(sim, recommended_price):
         {bars}
     </div>
     <p class="small-note">
-        Blue bar = recommended price with strongest expected revenue.
+        Recommended price is highlighted. Taller bars mean higher expected monthly revenue.
     </p>
     """
 
 def render_dashboard(result):
     summary = result["market_summary"]
     rec = result["recommendation"]
+    explanation = result.get("explanation", "")
     sim = result["simulation"].copy()
     products_df = result["products"].copy()
     parsed_prompt = result.get("parsed_prompt", {})
@@ -678,8 +671,8 @@ def render_dashboard(result):
 
     return f"""
     <div class="card">
-        <h2>Live Pricing Dashboard</h2>
-        <p class="small-note">Updates from the latest agent analysis.</p>
+    <h2>Live Dashboard</h2>
+    <p class="small-note">Recommendation, revenue curve, scenarios, and competitors.</p>
 
         <div class="mini-card">
             <div class="metric-label">Product Search</div>
@@ -692,17 +685,34 @@ def render_dashboard(result):
         </div>
 
         <div class="recommendation">
-            <h2>✅ Final Recommendation</h2>
+            <div class="metric-label">Recommended Price</div>
             <div class="recommendation-price">{price(rec["recommended_price"])}</div>
+            <h2>{safe_text(product_query.title())}</h2>
             <p>
-                Charge <strong>{price(rec["recommended_price"])}</strong> based on the live competitor benchmark
-                and revenue simulation.
+                Launch around <strong>{price(rec["recommended_price"])}</strong>.
+                This balances revenue and demand while positioning the product as a
+                <strong>{safe_text(rec["market_position"])}</strong> option.
             </p>
-            <p>
-                Expected revenue: <strong>{money(rec["expected_revenue"])}</strong><br>
-                Estimated conversion: <strong>{percent(rec["conversion_rate"])}</strong><br>
-                Market position: <strong>{safe_text(rec["market_position"])}</strong>
-            </p>
+
+            <div class="grid grid-3">
+                <div class="mini-card">
+                    <div class="metric-label">Revenue / Month</div>
+                    <div class="metric-value">{money(rec["expected_revenue"])}</div>
+                </div>
+                <div class="mini-card">
+                    <div class="metric-label">Conversion</div>
+                    <div class="metric-value">{percent(rec["conversion_rate"])}</div>
+                </div>
+                <div class="mini-card">
+                    <div class="metric-label">Customers / Month</div>
+                    <div class="metric-value">{int(rec["expected_customers"])}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h3>Why this price works</h3>
+            {markdown.markdown(explanation.strip(), extensions=["extra"])}
         </div>
 
         <div class="grid grid-3">
@@ -721,8 +731,9 @@ def render_dashboard(result):
         </div>
 
         <div class="section-card">
-            <h3>Revenue vs Price</h3>
+            <h3>Revenue Curve</h3>
             {chart_html}
+            <h3>Top Price Scenarios</h3>
             {sim_html}
         </div>
 
@@ -916,11 +927,10 @@ def analyze(category: str = Form(...)):
     summary_text = (
         f"✅ **Recommendation:** Charge **{price(rec['recommended_price'])}** "
         f"for **{product_query.title()}**.\n\n"
-        f"Estimated monthly revenue: **{money(rec['expected_revenue'])}**.  \n"
-        f"Estimated conversion: **{percent(rec['conversion_rate'])}**.  \n"
-        f"Market position: **{rec['market_position']}**."
+        f"This price is expected to generate **{money(rec['expected_revenue'])}/month** "
+        f"at an estimated **{percent(rec['conversion_rate'])} conversion rate**.\n\n"
+        f"It positions the product as a **{rec['market_position']}** option."
     )
-
     history = [
         {"role": "user", "content": category},
         {"role": "agent", "content": summary_text},
@@ -953,17 +963,11 @@ def ask(
         category=result.get("product_query", category),
         market_summary=result["market_summary"],
         recommendation=result["recommendation"],
+        objective=result.get("parsed_prompt", {}).get("objective", "maximize_revenue"),
         question=question,
     )
 
-    final_answer = generate_business_explanation(
-        category=result.get("product_query", category),
-        market_summary=result["market_summary"],
-        recommendation=result["recommendation"],
-        question=f"Give a one-sentence direct final answer to this question: {question}",
-    )
-
-    formatted_answer = f"**Final answer:** {final_answer}\n\n{answer}"
+    formatted_answer = answer
 
     chat_history.append({"role": "agent", "content": formatted_answer})
 
