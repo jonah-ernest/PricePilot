@@ -2,8 +2,9 @@ import os
 import sys
 import html
 import json
-import markdown
 import uuid
+import re
+import markdown
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -11,535 +12,617 @@ from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 
 from src.agent import run_pricing_agent
-from src.llm_reasoning import generate_business_explanation, generate_followup_suggestions
+from src.prompt_parser import parse_pricing_prompt
+from src.llm_reasoning import generate_business_explanation
 
 app = FastAPI(title="PricePilot")
+
 RESULT_CACHE = {}
 
 STYLE = """
 <style>
-    :root {
-        --bg: #f5f8fb;
-        --card: #ffffff;
-        --text: #101828;
-        --muted: #667085;
-        --border: #d9e2ec;
-        --accent: #0077b6;
-        --accent-dark: #005f92;
-        --accent-light: #e0f4ff;
-        --green: #137333;
-        --green-bg: #eaf8ef;
-        --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-        margin: 0;
-        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-    }
-
-    .topbar {
-        background: white;
-        border-bottom: 1px solid var(--border);
-        padding: 16px 24px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        position: sticky;
-        top: 0;
-        z-index: 20;
-    }
-
-    .logo {
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
-        background: var(--accent);
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 900;
-        font-size: 22px;
-    }
-
-    .topbar-title {
-        font-weight: 800;
-        font-size: 18px;
-    }
-
-    .topbar-subtitle {
-        color: var(--muted);
-        font-size: 14px;
-    }
-
-    .home-page {
-        max-width: 980px;
-        margin: 0 auto;
-        padding: 36px 22px 120px;
-    }
-
-    .bottom-input {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        width: 40%;   /* match chat panel width */
-        background: var(--bg);
-        border-top: 1px solid var(--border);
-        padding: 14px 18px;
-        z-index: 100;
-    }
-
-    .message-row:last-of-type {
-        margin-bottom: 160px;
-    }
-
-    .chat-panel {
-        padding-bottom: 300px !important;
-    }
-
-    .suggestions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        padding-bottom: 110px;
-    }
-
-    .dashboard-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-
-    .chat-panel,
-    .dashboard-panel {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .message-row {
-        display: flex;
-        gap: 12px;
-        margin-bottom: 16px;
-        align-items: flex-start;
-    }
-
-    .message-row.user {
-        justify-content: flex-end;
-    }
-
-    .avatar {
-        min-width: 38px;
-        height: 38px;
-        border-radius: 50%;
-        background: var(--accent);
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 800;
-    }
-
-    .avatar.user-avatar {
-        background: #e8eef5;
-        color: #344054;
-    }
-
-    .bubble {
-        background: white;
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 16px;
-        box-shadow: var(--shadow);
-        max-width: 760px;
-        line-height: 1.45;
-        font-size: 14px;
-    }
-
-    .user-bubble {
-        background: var(--accent);
-        color: white;
-        border-radius: 18px;
-        padding: 12px 16px;
-        max-width: 620px;
-        font-weight: 650;
-        box-shadow: var(--shadow);
-        font-size: 14px;
-    }
-
-    h1 {
-        font-size: 24px;
-        margin: 0 0 14px;
-        letter-spacing: -0.5px;
-    }
-
-    h2 {
-        font-size: 18px;
-        margin: 0 0 12px;
-    }
-
-    h3 {
-        font-size: 15px;
-        margin: 18px 0 8px;
-    }
-
-    p {
-        color: var(--muted);
-        margin: 8px 0;
-        line-height: 1.55;
-        font-size: 14px;
-    }
-
-    ul {
-        margin-top: 8px;
-        padding-left: 22px;
-    }
-
-    li {
-        margin-bottom: 8px;
-        font-size: 14px;
-    }
-
-    .prompt-card, .card {
-        background: white;
-        border: 1px solid var(--border);
-        border-radius: 24px;
-        padding: 24px;
-        box-shadow: var(--shadow);
-    }
-
-    textarea, input {
-        width: 100%;
-        border: 1px solid var(--border);
-        outline: none;
-        font-size: 16px;
-        padding: 15px;
-        border-radius: 16px;
-        font-family: inherit;
-        background: white;
-    }
-
-    textarea {
-        min-height: 120px;
-        resize: vertical;
-    }
-
-    button, .button {
-        border: none;
-        background: var(--accent);
-        color: white;
-        padding: 13px 18px;
-        border-radius: 14px;
-        font-weight: 800;
-        font-size: 14px;
-        cursor: pointer;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    button:hover, .button:hover {
-        background: var(--accent-dark);
-    }
-
-    .examples {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 18px;
-    }
-
-    .chip {
-        border: 1px solid var(--border);
-        background: #f8fafc;
-        color: #344054;
-        padding: 10px 14px;
-        border-radius: 14px;
-        font-size: 13px;
-        cursor: pointer;
-        font-weight: 600;
-
-        max-width: 100%;
-        white-space: normal;   /* 🔥 allows wrapping */
-        line-height: 1.3;
-    }
-
-    .chip:hover {
-        background: var(--accent-light);
-        border-color: #bae6fd;
-    }
-
-    .grid {
-        display: grid;
-        gap: 14px;
-    }
-
-    .grid-3 {
-        grid-template-columns: repeat(3, 1fr);
-    }
-
-    .grid-4 {
-        grid-template-columns: repeat(4, 1fr);
-    }
-
-    .mini-card {
-        background: #f8fafc;
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 16px;
-    }
-
-    .metric-label {
-        color: var(--muted);
-        font-size: 13px;
-        margin-bottom: 6px;
-    }
-
-    .metric-value {
-        font-size: 22px;
-        font-weight: 900;
-    }
-
-    .recommendation {
-        background: var(--green-bg);
-        border-left: 5px solid var(--green);
-        border-radius: 16px;
-        padding: 18px;
-        margin: 16px 0;
-    }
-
-    .recommendation h2 {
-        color: var(--green);
-    }
-
-    .recommendation-price {
-        font-size: 40px;
-        font-weight: 950;
-        color: var(--green);
-        margin: 6px 0;
-    }
-
-    .section-card {
-        margin-top: 18px;
-        padding-top: 16px;
-        border-top: 1px solid var(--border);
-    }
-
-    .app-container {
-        display: grid;
-        grid-template-columns: 40% 60%;
-        gap: 20px;
-        height: calc(100vh - 74px);
-        padding: 18px;
-        overflow: hidden;
-    }
-
-    .chat-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-bottom: 140px;  /* space for fixed input */
-    }
-
-    .dashboard-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-
-    .bottom-input-inner {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        max-width: 100%;
-    }
-
-    .bottom-input input {
-        flex: 1;
-        margin: 0;
-    }
-
-    .table {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 13px;
-        margin-top: 10px;
-        overflow: hidden;
-        border-radius: 14px;
-    }
-
-    .table tr:last-child td {
-        border-bottom: none;
-    }
-
-    .table th {
-        background: #f8fafc;
-        text-align: left;
-        padding: 10px;
-        border-bottom: 1px solid var(--border);
-        color: #475467;
-    }
-
-    .table td {
-        padding: 10px;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .bottom-input-inner {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-    }
-
-    .bottom-input input {
-        flex: 1;
-        margin: 0;
-    }
-
-    .small-note {
-        font-size: 13px;
-        color: var(--muted);
-    }
-
-    .agent-answer p:first-child {
-        background: var(--green-bg);
-        border-left: 5px solid var(--green);
-        padding: 12px 14px;
-        border-radius: 12px;
-    }
-
-    .dashboard-panel {
-        min-width: 0;
-        height: 100%;
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-
-    .home-page {
-        max-width: 1050px;
-        margin: 0 auto;
-        padding: 56px 22px 120px;
-    }
-
-    .prompt-card {
-        margin-top: 18px;
-    }
-
-    .prompt-card textarea {
-        font-size: 18px;
-        line-height: 1.5;
-    }
-
-    .examples {
-        margin-top: 24px;
-    }
-
-    .chip {
-        background: white;
-        border: 1px solid var(--border);
-        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
-        white-space: normal;
-        line-height: 1.3;
-    }
-
-    .strategy-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 18px;
-        margin: 24px 0;
-    }
-
-    .strategy-card {
-        border: 1px solid #dbe4ef;
-        border-radius: 18px;
-        padding: 22px;
-        background: #ffffff;
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
-    }
-
-    .strategy-title {
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-size: 13px;
-        font-weight: 800;
-        color: #64748b;
-    }
-
-    .strategy-price {
-        font-size: 34px;
-        font-weight: 900;
-        margin: 12px 0 18px;
-        color: #0f172a;
-    }
-
-    .strategy-metrics {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 10px;
-        margin-bottom: 12px;
-    }
-
-    .strategy-metrics span {
-        display: block;
-        font-size: 11px;
-        text-transform: uppercase;
-        color: #64748b;
-        font-weight: 700;
-    }
-
-    .strategy-metrics strong {
-        display: block;
-        font-size: 15px;
-        color: #0f172a;
-    }
-
-    .strategy-card p {
-        color: #64748b;
-        margin: 0;
-    }
-
-    .workflow-box {
-        background: #f8fafc;
-        border: 1px solid #dbe4ef;
-        border-radius: 14px;
-        padding: 16px;
-    }
-    .workflow-step {
-        margin-bottom: 12px;
-    }
-
-    @media (max-width: 900px) {
-        .app-container {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    @media (max-width: 850px) {
-        .grid-3, .grid-4 {
-            grid-template-columns: 1fr;
-        }
-
-        .avatar {
-            display: none;
-        }
-
-        .bottom-input-inner {
-            flex-direction: column;
-        }
-
-        button, .button {
-            width: 100%;
-        }
-    }
+:root {
+  --bg: #f7fbff;
+  --panel: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #dbeafe;
+  --accent: #0284c7;
+  --accent-dark: #0369a1;
+  --soft: #e0f2fe;
+  --success: #16a34a;
+  --warning: #f59e0b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border);
+  background: white;
+}
+
+.logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.topbar h1 {
+  font-size: 21px;
+  margin: 0;
+}
+
+.topbar p {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 42% 58%;
+  min-height: calc(100vh - 76px);
+}
+
+.chat {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 76px);
+  background: #f8fbff;
+}
+
+.messages {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.msg-row {
+  display: flex;
+  margin-bottom: 16px;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 86%;
+  padding: 15px 17px;
+  border-radius: 18px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+  font-size: 15px;
+}
+
+.user .bubble {
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 6px;
+}
+
+.agent .bubble {
+  background: white;
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+
+.agent-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.setup-card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.setup-title {
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.progress-track {
+  height: 8px;
+  background: #e5f3ff;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0 12px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.progress-steps {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.step.done {
+  color: var(--success);
+  font-weight: 800;
+}
+
+.input-area {
+  padding: 18px;
+  border-top: 1px solid var(--border);
+  background: white;
+}
+
+.input-form {
+  display: flex;
+  gap: 10px;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  font-size: 16px;
+  outline: none;
+}
+
+button {
+  border: none;
+  background: var(--accent);
+  color: white;
+  padding: 13px 18px;
+  border-radius: 16px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 6px 0 18px 42px;
+}
+
+.chip {
+  background: white;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 9px 13px;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chip.primary-chip {
+  background: var(--accent);
+  color: white;
+}
+
+.chip:hover {
+  background: var(--soft);
+  color: var(--text);
+}
+
+.dashboard {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.card h2,
+.card h3 {
+  margin-top: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.metric {
+  background: #f8fafc;
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.metric-value {
+  font-size: 23px;
+  font-weight: 850;
+  margin-top: 5px;
+}
+
+.small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.canvas-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.canvas-row:last-child {
+  border-bottom: none;
+}
+
+.canvas-label {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.canvas-value {
+  font-weight: 650;
+}
+
+.empty-value {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.bars {
+  display: flex;
+  align-items: end;
+  gap: 7px;
+  height: 150px;
+  margin-top: 14px;
+}
+
+.bar-wrap {
+  flex: 1;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.bar {
+  width: 100%;
+  background: #bae6fd;
+  border-radius: 8px 8px 0 0;
+}
+
+.bar.best {
+  background: var(--accent);
+}
+
+.confirm-box {
+  background: #eff6ff;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  margin-top: 8px;
+}
+
+/* --- Chat polish overrides --- */
+
+.messages {
+  padding: 20px 22px 120px;
+}
+
+.bubble {
+  font-size: 14px;
+}
+
+.user .bubble {
+  max-width: 62%;
+}
+
+.agent .bubble {
+  max-width: 74%;
+}
+
+.msg-row {
+  margin-bottom: 14px;
+}
+
+.setup-card {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.advisor-actions {
+  margin: 10px 0 20px 42px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.advisor-actions form {
+  margin: 0;
+}
+
+.action-chip {
+  width: 100%;
+  border-radius: 14px;
+  text-align: left;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+.action-chip:hover {
+  background: var(--soft);
+}
+
+.action-chip.primary-chip {
+  background: var(--accent);
+  color: white;
+}
+
+.advisor-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+/* --- Advisor workspace polish --- */
+
+.chips.advisor-actions {
+  margin: 12px 0 20px 42px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.action-group-title {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+
+.chips.advisor-actions form {
+  margin: 0;
+}
+
+.action-chip {
+  width: 100%;
+  border-radius: 14px;
+  text-align: left;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+.action-chip:hover {
+  background: var(--soft);
+}
+
+.action-chip.primary-chip {
+  background: var(--accent);
+  color: white;
+}
+
+.chat-archive-note {
+  margin: 0 0 14px 42px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.active-plan-card {
+  border: 1px solid #bae6fd;
+  background: #f0f9ff;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 11px;
+  margin-top: 12px;
+}
+
+.plan-box {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 13px;
+}
+
+.plan-box-title {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 800;
+  margin-bottom: 5px;
+}
+
+/* --- Compact Advisor Mode layout --- */
+
+.recent-discussion-title {
+  margin: 16px 0 8px 42px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.advisor-spacer {
+  height: 8px;
+}
+
+.chat-archive-note {
+  margin: 8px 0 12px 42px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* --- Dashboard tabs --- */
+
+.dashboard-tabs {
+  margin-bottom: 16px;
+}
+
+.tab-input {
+  display: none;
+}
+
+.tab-labels {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.tab-labels label {
+  flex: 1;
+  text-align: center;
+  padding: 11px 14px;
+  border-radius: 13px;
+  font-weight: 800;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tab-labels label:hover {
+  background: var(--soft);
+  color: var(--text);
+}
+
+.tab-panel {
+  display: none;
+}
+
+#tab-overview:checked ~ .tab-labels label[for="tab-overview"],
+#tab-market:checked ~ .tab-labels label[for="tab-market"],
+#tab-advisor:checked ~ .tab-labels label[for="tab-advisor"],
+#tab-competitors:checked ~ .tab-labels label[for="tab-competitors"] {
+  background: var(--accent);
+  color: white;
+}
+
+#tab-overview:checked ~ .tab-panels #panel-overview,
+#tab-market:checked ~ .tab-panels #panel-market,
+#tab-advisor:checked ~ .tab-panels #panel-advisor,
+#tab-competitors:checked ~ .tab-panels #panel-competitors {
+  display: block;
+}
+
+.empty-advisor-plan {
+  background: #f8fafc;
+  border: 1px dashed var(--border);
+  border-radius: 18px;
+  padding: 18px;
+}
+
 </style>
 """
+
+
+PHASES = ["product", "audience", "positioning", "differentiation", "objective", "constraints"]
+
+PHASE_LABELS = {
+    "product": "Product",
+    "audience": "Customer",
+    "positioning": "Positioning",
+    "differentiation": "Edge",
+    "objective": "Goal",
+    "constraints": "Constraints",
+    "confirm": "Confirm",
+    "complete": "Complete",
+}
+
+OBJECTIVE_LABELS = {
+    "maximize_growth": "Maximize growth",
+    "maximize_revenue": "Maximize revenue",
+    "competitive_entry": "Competitive entry",
+    "premium_positioning": "Premium positioning",
+}
 
 
 def money(value):
@@ -558,25 +641,317 @@ def safe_text(value):
     return html.escape(str(value or ""), quote=True)
 
 
-def encode_history(history):
-    return html.escape(json.dumps(history), quote=True)
+def encode_json(value):
+    return html.escape(json.dumps(value), quote=True)
 
 
-def decode_history(history_json):
+def decode_json(value, default):
     try:
-        return json.loads(history_json) if history_json else []
+        return json.loads(value) if value else default
     except Exception:
-        return []
+        return default
+
+
+def blank_profile():
+    return {
+        "product_query": None,
+        "business_type": None,
+        "audience": None,
+        "positioning": None,
+        "key_features": [],
+        "differentiation": None,
+        "objective": None,
+        "cost_floor": None,
+        "sales_channel": "online store",
+        "launch_stage": "new_launch",
+        "competitor_frame": None,
+        "price_sensitivity": None,
+        "risk_tolerance": "medium",
+        "constraints_answered": False,
+    }
+
+
+def has_value(value):
+    if value is None:
+        return False
+    if isinstance(value, list):
+        return len([x for x in value if str(x).strip()]) > 0
+    return str(value).strip() != "" and str(value).lower() != "none"
+
+
+def clean_value(value, fallback="Not specified"):
+    if not has_value(value):
+        return fallback
+    if isinstance(value, list):
+        return ", ".join(str(x) for x in value if str(x).strip())
+    return str(value)
+
+
+def objective_label(value):
+    if not value:
+        return "Not specified"
+    return OBJECTIVE_LABELS.get(value, str(value).replace("_", " ").title())
+
+
+def extract_cost_floor(text):
+    text = text or ""
+    lower = text.lower()
+
+    if "no" in lower and ("constraint" in lower or "floor" in lower or "minimum" in lower):
+        return None
+
+    constraint_words = ["cost", "cogs", "floor", "minimum", "min", "less than", "below", "at least", "margin"]
+    if not any(word in lower for word in constraint_words):
+        return None
+
+    matches = re.findall(r"\$?\s*(\d+(?:\.\d+)?)", text)
+    if not matches:
+        return None
+
+    return max(float(x) for x in matches)
+
+
+def objective_from_text(text):
+    lower = text.lower()
+
+    if any(x in lower for x in ["grow", "growth", "adoption", "customers", "volume"]):
+        return "maximize_growth"
+    if any(x in lower for x in ["premium", "luxury", "high-end", "signal quality"]):
+        return "premium_positioning"
+    if any(x in lower for x in ["competitive", "entry", "market share", "undercut"]):
+        return "competitive_entry"
+    if any(x in lower for x in ["revenue", "profit", "margin"]):
+        return "maximize_revenue"
+
+    return None
+
+
+def positioning_from_text(text):
+    lower = text.lower()
+
+    if any(x in lower for x in ["budget", "cheap", "affordable", "entry", "cheapest"]):
+        return "budget"
+    if any(x in lower for x in ["premium", "luxury", "high-end", "specialist", "flagship"]):
+        return "premium"
+    if any(x in lower for x in ["value", "mid", "balanced", "mainstream", "accessible"]):
+        return "mid-market"
+
+    return None
+
+
+def seed_profile_from_text(profile, text):
+    try:
+        parsed = parse_pricing_prompt(text)
+    except Exception:
+        parsed = {}
+
+    if parsed.get("product_query"):
+        profile["product_query"] = parsed.get("product_query")
+
+    if parsed.get("business_type"):
+        profile["business_type"] = parsed.get("business_type")
+
+    if parsed.get("audience"):
+        profile["audience"] = parsed.get("audience")
+
+    if parsed.get("positioning"):
+        profile["positioning"] = parsed.get("positioning")
+
+    if parsed.get("key_features"):
+        profile["key_features"] = parsed.get("key_features")
+
+    if parsed.get("differentiation"):
+        profile["differentiation"] = parsed.get("differentiation")
+
+    objective = objective_from_text(text)
+    if objective:
+        profile["objective"] = objective
+
+    cost_floor = extract_cost_floor(text)
+    if cost_floor:
+        profile["cost_floor"] = cost_floor
+        profile["constraints_answered"] = True
+
+    return profile
+
+
+def apply_message_to_profile(profile, phase, message):
+    message = message.strip()
+
+    if phase == "product":
+        profile = seed_profile_from_text(profile, message)
+        if not profile.get("product_query"):
+            profile["product_query"] = message
+
+    elif phase == "audience":
+        profile["audience"] = message
+
+        lower = message.lower()
+        if "beginner" in lower or "budget" in lower:
+            profile["price_sensitivity"] = "high"
+        elif "professional" in lower or "power" in lower:
+            profile["price_sensitivity"] = "medium"
+        elif "enthusiast" in lower or "quality" in lower:
+            profile["price_sensitivity"] = "medium"
+
+    elif phase == "positioning":
+        profile["positioning"] = positioning_from_text(message) or message
+
+    elif phase == "differentiation":
+        profile["differentiation"] = message
+        profile["key_features"] = [x.strip() for x in re.split(r",| and ", message) if x.strip()]
+
+    elif phase == "objective":
+        profile["objective"] = objective_from_text(message) or "maximize_revenue"
+
+    elif phase == "constraints":
+        cost_floor = extract_cost_floor(message)
+        if cost_floor:
+            profile["cost_floor"] = cost_floor
+        profile["constraints_answered"] = True
+
+    return profile
+
+
+def next_phase(profile):
+    if not has_value(profile.get("product_query")):
+        return "product"
+    if not has_value(profile.get("audience")):
+        return "audience"
+    if not has_value(profile.get("positioning")):
+        return "positioning"
+    if not has_value(profile.get("differentiation")) and not has_value(profile.get("key_features")):
+        return "differentiation"
+    if not has_value(profile.get("objective")):
+        return "objective"
+    if not profile.get("constraints_answered"):
+        return "constraints"
+    return "confirm"
+
+
+def phase_question(phase, profile):
+    product = clean_value(profile.get("product_query"), "this product")
+    audience = clean_value(profile.get("audience"), "your target customer")
+
+    if phase == "product":
+        return "Great, I’ll help build a launch pricing strategy. What product are we pricing?"
+    if phase == "audience":
+        return f"Got it, we are pricing **{product}**. Who are you trying to win first?"
+    if phase == "positioning":
+        return f"Perfect. For **{audience}**, how should this product be positioned in the market?"
+    if phase == "differentiation":
+        return f"Why would **{audience}** choose your **{product}** over the alternatives?"
+    if phase == "objective":
+        return "What is the main pricing goal for this launch?"
+    if phase == "constraints":
+        return "Any cost floor, minimum acceptable price, or margin constraint I should respect?"
+    if phase == "confirm":
+        return "Here is the strategy profile I’ll use. Does this look right before I build the pricing strategy?"
+    return "What should we adjust?"
+
+
+
+def phase_chips(phase):
+    if phase == "product":
+        return [
+            "DJ turntables",
+            "Wireless headphones",
+            "Standing desk",
+            "Skincare product",
+        ]
+
+    if phase == "audience":
+        return [
+            "Beginners / first-time buyers",
+            "Budget-conscious shoppers",
+            "Professionals / power users",
+            "Enthusiasts who care about quality",
+        ]
+
+    if phase == "positioning":
+        return [
+            "Cheapest credible option",
+            "Best value for the price",
+            "Premium but still accessible",
+            "High-end specialist product",
+        ]
+
+    if phase == "differentiation":
+        return [
+            "Lower price than competitors",
+            "Better quality for the price",
+            "Easier to use than alternatives",
+            "Specialized for this customer segment",
+        ]
+
+    if phase == "objective":
+        return [
+            "Grow quickly",
+            "Maximize revenue",
+            "Enter competitively",
+            "Signal premium quality",
+        ]
+
+    if phase == "constraints":
+        return [
+            "No hard constraint",
+            "Cost floor is $50",
+            "Cost floor is $100",
+            "Cost floor is $150",
+        ]
+
+    if phase == "confirm":
+        return [
+            "Looks right, build strategy",
+            "Edit customer",
+            "Edit positioning",
+            "Edit goal",
+            "Add price constraint",
+        ]
+
+    if phase == "complete":
+        return [
+            "Build bundle strategy",
+            "Create 30-day test plan",
+            "Pressure-test biggest risks",
+            "Run growth scenario",
+            "Run premium scenario",
+            "Add a $100 cost floor",
+        ]
+
+    return []
+
+
+def profile_to_context(profile):
+    objective = objective_label(profile.get("objective"))
+    cost_floor = profile.get("cost_floor")
+
+    lines = [
+        f"Product: {clean_value(profile.get('product_query'))}",
+        f"Business type: {clean_value(profile.get('business_type'))}",
+        f"Target customer: {clean_value(profile.get('audience'))}",
+        f"Positioning: {clean_value(profile.get('positioning'))}",
+        f"Differentiation: {clean_value(profile.get('differentiation'))}",
+        f"Key features: {clean_value(profile.get('key_features'))}",
+        f"Pricing objective: {objective}",
+        f"Sales channel: {clean_value(profile.get('sales_channel'))}",
+        f"Launch stage: {clean_value(profile.get('launch_stage'))}",
+    ]
+
+    if cost_floor:
+        lines.append(f"Minimum acceptable price / cost floor: ${cost_floor:.2f}")
+
+    return "\n".join(lines)
 
 
 def render_topbar():
     return """
     <div class="topbar">
-        <div class="logo">↗</div>
-        <div>
-            <div class="topbar-title">Pricing Strategy Agent</div>
-            <div class="topbar-subtitle">AI analyst + live pricing dashboard</div>
-        </div>
+      <div class="logo">↗</div>
+      <div>
+        <h1>Pricing Strategy Agent</h1>
+        <p>AI launch pricing strategist</p>
+      </div>
     </div>
     """
 
@@ -585,51 +960,274 @@ def render_history(history):
     html_parts = ""
 
     for item in history:
-        role = item.get("role")
+        role = item.get("role", "agent")
         content = item.get("content", "")
 
         if role == "user":
             html_parts += f"""
-            <div class="message-row user">
-                <div class="user-bubble">{safe_text(content)}</div>
-                <div class="avatar user-avatar">👤</div>
+            <div class="msg-row user">
+              <div class="bubble">{safe_text(content)}</div>
             </div>
             """
         else:
             html_parts += f"""
-            <div class="message-row">
-                <div class="avatar">✦</div>
-                <div class="bubble agent-answer">
-                    {markdown.markdown(content.strip(), extensions=["extra"])}
-                </div>
+            <div class="msg-row agent">
+              <div class="agent-icon">✦</div>
+              <div class="bubble">{markdown.markdown(content.strip(), extensions=["extra"])}</div>
             </div>
             """
 
     return html_parts
 
+def compact_advisor_history(history):
+    """
+    After the strategy is built, hide the setup transcript and only show
+    the most relevant advisor-mode messages.
+    """
+    if not history:
+        return []
 
-def make_simulation_table(sim):
-    display = sim.sort_values("expected_revenue", ascending=False).head(5).rename(
-        columns={
-            "price": "Price",
-            "conversion_rate": "Conversion",
-            "expected_customers": "Customers",
-            "expected_revenue": "Revenue",
-        }
-    )
+    build_index = None
 
-    display["Price"] = display["Price"].apply(price)
-    display["Conversion"] = display["Conversion"].apply(percent)
-    display["Customers"] = display["Customers"].apply(lambda x: f"{float(x):,.0f}")
-    display["Revenue"] = display["Revenue"].apply(money)
+    for i, item in enumerate(history):
+        content = item.get("content", "")
+        role = item.get("role", "")
 
-    keep_cols = [c for c in ["Price", "Conversion", "Customers", "Revenue"] if c in display.columns]
-    return display[keep_cols].to_html(index=False, classes="table", escape=False)
+        if role == "agent" and (
+            "I built the launch pricing strategy" in content
+            or "Updated recommendation" in content
+            or "I updated the strategy" in content
+        ):
+            build_index = i
+
+    if build_index is None:
+        return history[-4:]
+
+    advisor_history = history[build_index:]
+
+    if len(advisor_history) <= 5:
+        return advisor_history
+
+    # Keep the original build summary plus the latest advisor exchange.
+    return [advisor_history[0]] + advisor_history[-4:]
+
+
+def completed_count(profile):
+    count = 0
+    count += 1 if has_value(profile.get("product_query")) else 0
+    count += 1 if has_value(profile.get("audience")) else 0
+    count += 1 if has_value(profile.get("positioning")) else 0
+    count += 1 if has_value(profile.get("differentiation")) or has_value(profile.get("key_features")) else 0
+    count += 1 if has_value(profile.get("objective")) else 0
+    count += 1 if profile.get("constraints_answered") else 0
+    return count
+
+
+
+def render_setup_progress(profile, phase):
+    if phase == "complete":
+        product = clean_value(profile.get("product_query"), "Product")
+        customer = clean_value(profile.get("audience"), "Customer")
+        goal = objective_label(profile.get("objective"))
+
+        return f"""
+        <div class="setup-card">
+          <div class="advisor-label">Advisor Mode</div>
+          <div class="setup-title">Strategy built ✓</div>
+          <p class="small" style="margin:0;">
+            {safe_text(product)} · {safe_text(customer)} · {safe_text(goal)}
+          </p>
+          <p class="small" style="margin:8px 0 0;">
+            Use the actions below to pressure-test, revise, or extend the launch pricing strategy.
+          </p>
+        </div>
+        """
+
+    done = completed_count(profile)
+    width = int((done / len(PHASES)) * 100)
+
+    steps = ""
+    for p in PHASES:
+        complete = False
+
+        if p == "product":
+            complete = has_value(profile.get("product_query"))
+        elif p == "audience":
+            complete = has_value(profile.get("audience"))
+        elif p == "positioning":
+            complete = has_value(profile.get("positioning"))
+        elif p == "differentiation":
+            complete = has_value(profile.get("differentiation")) or has_value(profile.get("key_features"))
+        elif p == "objective":
+            complete = has_value(profile.get("objective"))
+        elif p == "constraints":
+            complete = profile.get("constraints_answered")
+
+        cls = "step done" if complete else "step"
+        steps += f'<div class="{cls}">{"✓" if complete else "○"} {PHASE_LABELS[p]}</div>'
+
+    return f"""
+    <div class="setup-card">
+      <div class="setup-title">Strategy setup: {done} of {len(PHASES)} complete</div>
+      <div class="progress-track"><div class="progress-fill" style="width:{width}%"></div></div>
+      <div class="progress-steps">{steps}</div>
+    </div>
+    """
+
+
+def render_chip_forms(chips, profile, phase, history, session_id):
+    if not chips:
+        return ""
+
+    profile_value = encode_json(profile)
+    history_value = encode_json(history)
+
+    if phase == "complete":
+        advice_actions = [
+            "Build bundle strategy",
+            "Create 30-day test plan",
+            "Pressure-test biggest risks",
+        ]
+
+        strategy_actions = [
+            "Run growth scenario",
+            "Run premium scenario",
+            "Add a $100 cost floor",
+        ]
+
+        chip_html = '<div class="action-group-title">Get advice</div>'
+
+        for chip in advice_actions:
+            chip_html += f"""
+            <form method="post" action="/chat">
+              <input type="hidden" name="message" value="{safe_text(chip)}">
+              <input type="hidden" name="profile" value="{profile_value}">
+              <input type="hidden" name="phase" value="{safe_text(phase)}">
+              <input type="hidden" name="history" value="{history_value}">
+              <input type="hidden" name="session_id" value="{safe_text(session_id)}">
+              <button class="chip action-chip" type="submit">{safe_text(chip)}</button>
+            </form>
+            """
+
+        chip_html += '<div class="action-group-title">Update strategy</div>'
+
+        for chip in strategy_actions:
+            chip_html += f"""
+            <form method="post" action="/chat">
+              <input type="hidden" name="message" value="{safe_text(chip)}">
+              <input type="hidden" name="profile" value="{profile_value}">
+              <input type="hidden" name="phase" value="{safe_text(phase)}">
+              <input type="hidden" name="history" value="{history_value}">
+              <input type="hidden" name="session_id" value="{safe_text(session_id)}">
+              <button class="chip action-chip primary-chip" type="submit">{safe_text(chip)}</button>
+            </form>
+            """
+
+        return f'<div class="chips advisor-actions">{chip_html}</div>'
+
+    chip_html = ""
+    for chip in chips:
+        primary = "primary-chip" if "build" in chip.lower() or "looks right" in chip.lower() else ""
+        chip_html += f"""
+        <form method="post" action="/chat">
+          <input type="hidden" name="message" value="{safe_text(chip)}">
+          <input type="hidden" name="profile" value="{profile_value}">
+          <input type="hidden" name="phase" value="{safe_text(phase)}">
+          <input type="hidden" name="history" value="{history_value}">
+          <input type="hidden" name="session_id" value="{safe_text(session_id)}">
+          <button class="chip {primary}" type="submit">{safe_text(chip)}</button>
+        </form>
+        """
+
+    return f'<div class="chips">{chip_html}</div>'
+
+
+def canvas_row(label, value):
+    value_html = safe_text(clean_value(value))
+    cls = "" if has_value(value) else "empty-value"
+
+    return f"""
+    <div class="canvas-row">
+      <div class="canvas-label">{safe_text(label)}</div>
+      <div class="canvas-value {cls}">{value_html}</div>
+    </div>
+    """
+
+
+def render_strategy_canvas(profile):
+    cost_floor = profile.get("cost_floor")
+    cost_text = f"${cost_floor:.2f}" if cost_floor else ("No hard constraint" if profile.get("constraints_answered") else None)
+
+    return f"""
+    <div class="card">
+      <h2>Strategy Canvas</h2>
+      <p class="small">This fills in as the chat learns the product strategy.</p>
+
+      {canvas_row("Product", profile.get("product_query"))}
+      {canvas_row("Customer", profile.get("audience"))}
+      {canvas_row("Positioning", profile.get("positioning"))}
+      {canvas_row("Differentiation", profile.get("differentiation"))}
+      {canvas_row("Pricing goal", objective_label(profile.get("objective")) if profile.get("objective") else None)}
+      {canvas_row("Cost / price floor", cost_text)}
+      {canvas_row("Sales channel", profile.get("sales_channel"))}
+      {canvas_row("Launch stage", profile.get("launch_stage"))}
+    </div>
+
+    <div class="card">
+      <h3>How this will work</h3>
+      <div class="grid-2">
+        <div class="metric">
+          <div class="metric-label">1. Discover</div>
+          <p>Build the product, customer, positioning, and goal profile.</p>
+        </div>
+        <div class="metric">
+          <div class="metric-label">2. Confirm</div>
+          <p>Review the strategy assumptions before running the pricing model.</p>
+        </div>
+        <div class="metric">
+          <div class="metric-label">3. Simulate</div>
+          <p>Use live market data and guardrails to recommend a launch price.</p>
+        </div>
+        <div class="metric">
+          <div class="metric-label">4. Iterate</div>
+          <p>Ask what-if questions to adjust growth, premium, or constraint scenarios.</p>
+        </div>
+      </div>
+    </div>
+    """
+
+
+def make_revenue_chart(sim, recommended_price):
+    chart_df = sim.sort_values("price").copy()
+
+    if len(chart_df) > 18:
+        chart_df = chart_df.iloc[:: max(1, len(chart_df) // 18)]
+
+    max_revenue = chart_df["expected_revenue"].max()
+    bars = ""
+
+    for _, row in chart_df.iterrows():
+        height = max(8, (row["expected_revenue"] / max_revenue) * 120)
+        is_best = abs(row["price"] - recommended_price) < 0.01
+        best_class = "best" if is_best else ""
+
+        bars += f"""
+        <div class="bar-wrap">
+          <div class="bar {best_class}" style="height:{height}px"></div>
+          <div>{price(row["price"])}</div>
+        </div>
+        """
+
+    return f"""
+    <div class="bars">{bars}</div>
+    <p class="small">Recommended price is highlighted.</p>
+    """
 
 
 def make_products_table(products_df):
     cols = [
-        c for c in ["product_name", "name", "title", "price", "rating", "reviews", "source"]
+        c
+        for c in ["product_name", "name", "title", "price", "rating", "reviews", "source"]
         if c in products_df.columns
     ]
 
@@ -641,537 +1239,731 @@ def make_products_table(products_df):
     if "price" in display.columns:
         display["price"] = display["price"].apply(price)
 
-    if "rating" in display.columns:
-        display["rating"] = display["rating"].apply(
-            lambda x: f"{float(x):.1f}" if str(x) != "nan" else ""
-        )
-
     return display.to_html(index=False, classes="table", escape=False)
 
 
-def suggested_questions(result, history=None):
-    history = history or []
-    parsed_prompt = result.get("parsed_prompt", {})
-    objective = parsed_prompt.get("objective", "maximize_revenue")
+def advisor_plan_from_message(message, result):
+    lower = message.lower()
+    profile = result.get("strategy_profile", {})
+    rec = result["recommendation"]
 
-    recent_context = "\n".join(
-        f"{item.get('role')}: {item.get('content')[:300]}"
-        for item in history[-4:]
+    product = clean_value(profile.get("product_query") or result.get("product_query"), "the product")
+    customer = clean_value(profile.get("audience"), "the target customer")
+    base_price = float(rec["recommended_price"])
+    cost_floor = float(profile.get("cost_floor") or 0)
+
+    if "bundle" in lower:
+        base_price = max(base_price, cost_floor)
+        return {
+            "title": "Bundle Strategy",
+            "summary": f"Use bundles to lift average order value while keeping the base {product} price visible.",
+            "boxes": [
+                {
+                    "title": "Base Product",
+                    "value": price(base_price),
+                    "detail": "Keeps the entry offer simple and easy to compare.",
+                },
+                {
+                    "title": "Starter Bundle",
+                    "value": price(base_price * 1.15),
+                    "detail": f"Best default upsell for {customer}.",
+                },
+                {
+                    "title": "Premium Bundle",
+                    "value": price(base_price * 1.30),
+                    "detail": "Captures customers with higher willingness to pay.",
+                },
+            ],
+            "next_step": "Test base product vs starter bundle and compare conversion, revenue per visitor, and average order value.",
+        }
+
+    if "30 days" in lower or "test" in lower or "experiment" in lower:
+        effective_base_price = max(base_price, cost_floor)
+        low_price = max(effective_base_price * 0.92, cost_floor)
+        base_price = effective_base_price
+        high_price = effective_base_price * 1.08
+
+        return {
+            "title": "30-Day Test Plan",
+            "summary": "Treat the recommendation as a launch hypothesis, then validate it with price, messaging, and bundle tests.",
+            "boxes": [
+                {
+                    "title": "Price Test",
+                    "value": f"{price(low_price)} / {price(base_price)} / {price(high_price)}",
+                    "detail": "Compare revenue per visitor, not only conversion.",
+                },
+                {
+                    "title": "Messaging Test",
+                    "value": "Value vs Specialist",
+                    "detail": "Test whether customers respond more to savings or expertise.",
+                },
+                {
+                    "title": "Bundle Test",
+                    "value": price(base_price * 1.15),
+                    "detail": "Measure bundle attach rate and average order value.",
+                },
+            ],
+            "next_step": "Keep the version that improves revenue per visitor without hurting perceived quality.",
+        }
+
+    if "risk" in lower:
+        return {
+            "title": "Risk Review",
+            "summary": "The biggest risk is not only price. It is whether customers understand why this product deserves its price.",
+            "boxes": [
+                {
+                    "title": "Market Risk",
+                    "value": "Comparable quality",
+                    "detail": "Competitor data may include products that are not true substitutes.",
+                },
+                {
+                    "title": "Positioning Risk",
+                    "value": "Value proof",
+                    "detail": "Premium or specialist positioning needs clear evidence.",
+                },
+                {
+                    "title": "Demand Risk",
+                    "value": "Conversion tradeoff",
+                    "detail": "Higher price may lift revenue per order but reduce early adoption.",
+                },
+            ],
+            "next_step": "If conversion is weak but engagement is strong, improve messaging before cutting price.",
+        }
+
+    return None
+
+
+def render_active_advisor_plan(result):
+    plan = result.get("advisor_plan")
+
+    if not plan:
+        return ""
+
+    boxes_html = ""
+    for box in plan.get("boxes", []):
+        boxes_html += f"""
+        <div class="plan-box">
+        <div class="plan-box-title">{safe_text(box.get("title"))}</div>
+        <div class="metric-value" style="font-size:18px;">{safe_text(box.get("value"))}</div>
+        <p class="small">{safe_text(box.get("detail"))}</p>
+        </div>
+        """
+
+    return f"""
+    <div class="card active-plan-card">
+    <h3>Active Advisor Plan: {safe_text(plan.get("title"))}</h3>
+    <p>{safe_text(plan.get("summary"))}</p>
+    <div class="plan-grid">
+        {boxes_html}
+    </div>
+    <p class="small" style="margin-top:12px;"><strong>Next step:</strong> {safe_text(plan.get("next_step"))}</p>
+    </div>
+    """
+
+def render_dashboard(result):
+    rec = result["recommendation"]
+    summary = result["market_summary"]
+    sim = result["simulation"].copy()
+    products = result["products"].copy()
+    profile = result.get("strategy_profile", {})
+    explanation = result.get("explanation", "")
+
+    cost_floor_text = (
+        f"${profile.get('cost_floor'):.2f}"
+        if profile.get("cost_floor")
+        else "No hard constraint"
     )
 
-    try:
-        return generate_followup_suggestions(
-            category=result.get("product_query", "product"),
-            market_summary=result["market_summary"],
-            recommendation=result["recommendation"],
-            objective=f"{objective}\nRecent conversation:\n{recent_context}",
-        )
-    except Exception:
-        return [
-            "What are the risks of this price?",
-            "How would growth pricing change this?",
-            "What competitors matter most?",
-            "Should I launch with a discount?",
-        ]
-
-
-def make_revenue_chart(sim, recommended_price):
-    chart_df = sim.sort_values("price").copy()
-
-    if len(chart_df) > 18:
-        chart_df = chart_df.iloc[:: max(1, len(chart_df) // 18)]
-
-    max_revenue = chart_df["expected_revenue"].max()
-
-    bars = ""
-    for _, row in chart_df.iterrows():
-        height = max(8, (row["expected_revenue"] / max_revenue) * 120)
-        is_best = abs(row["price"] - recommended_price) < 0.01
-        bar_color = "var(--accent)" if is_best else "#bae6fd"
-
-        bars += f"""
-        <div style="flex:1; text-align:center;">
-            <div style="
-                height:{height}px;
-                background:{bar_color};
-                border-radius:8px 8px 0 0;
-                margin-bottom:6px;
-            " title="{price(row['price'])} → {money(row['expected_revenue'])}"></div>
-            <div style="font-size:11px; color:var(--muted);">{price(row['price'])}</div>
+    guardrail_html = ""
+    if rec.get("guardrail_note"):
+        guardrail_html = f"""
+        <div class="metric">
+          <div class="metric-label">Guardrail Applied</div>
+          <p>{safe_text(rec["guardrail_note"])}</p>
         </div>
         """
-
-    return f"""
-    <div style="
-        display:flex;
-        align-items:end;
-        gap:6px;
-        height:160px;
-        border-bottom:1px solid var(--border);
-        margin-top:12px;
-        padding-top:20px;
-    ">
-        {bars}
-    </div>
-    <p class="small-note">
-        Recommended price is highlighted. Taller bars mean higher expected monthly revenue.
-    </p>
-    """
-
-def make_strategy_cards(sim):
-    sim = sim.copy()
-
-    max_revenue_row = sim.loc[sim["expected_revenue"].idxmax()]
-    max_growth_row = sim.loc[sim["expected_customers"].idxmax()]
-
-    sim["rev_norm"] = sim["expected_revenue"] / sim["expected_revenue"].max()
-    sim["conv_norm"] = sim["conversion_rate"] / sim["conversion_rate"].max()
-    sim["balance_score"] = 0.3 * sim["rev_norm"] + 0.7 * sim["conv_norm"]
-
-    balanced_row = sim.loc[sim["balance_score"].idxmax()]
-
-    cards = [
-        ("Balanced", balanced_row, "Balance demand and revenue"),
-        ("Penetration", max_growth_row, "Attract more initial customers"),
-        ("Max Revenue", max_revenue_row, "Highest modeled monthly revenue"),
-    ]
-
-    html_cards = ""
-
-    for title, row, subtitle in cards:
-        html_cards += f"""
-        <div class="strategy-card">
-            <div class="strategy-title">{title}</div>
-            <div class="strategy-price">{money(row["price"])}</div>
-            <div class="strategy-metrics">
-                <div><span>Conv.</span><strong>{percent(row["conversion_rate"])}</strong></div>
-                <div><span>Units/Mo</span><strong>{int(row["expected_customers"])}</strong></div>
-                <div><span>Revenue</span><strong>{money(row["expected_revenue"])}</strong></div>
-            </div>
-            <p>{subtitle}</p>
-        </div>
-        """
-
-    return f'<div class="strategy-grid">{html_cards}</div>'
-
-def make_workflow_html(result):
-    product_query = result.get("product_query", "product")
-    parsed_prompt = result.get("parsed_prompt", {})
-    objective = parsed_prompt.get("objective", "maximize_revenue")
-    num_products = result["market_summary"]["num_products"]
-
-    steps = [
-        ("Interpret user request", "Input parser", f"User wants a pricing strategy for: {product_query}."),
-        ("Load pricing data", "Scraper / dataset loader", "Collected product prices and competitor data."),
-        ("Filter competitors", "Category filter", f"Found {int(num_products)} relevant products."),
-        ("Benchmark market", "Pricing benchmark tool", "Calculated market median, minimum, and maximum prices."),
-        ("Simulate revenue scenarios", "Revenue simulation tool", "Modeled price, conversion, customers, and expected revenue."),
-        ("Choose recommended price", "Recommendation tool", f"Selected price based on objective: {objective}."),
-        ("Explain strategy", "Gemini reasoning layer", "Generated a concise business explanation and follow-up suggestions."),
-    ]
-
-    rows = ""
-    for title, tool, detail in steps:
-        rows += f"""
-        <div class="workflow-step">
-            <strong>{safe_text(title)}</strong><br>
-            <span>Tool: {safe_text(tool)}</span><br>
-            <p>{safe_text(detail)}</p>
-        </div>
-        """
-
-    return f"""
-    <div class="workflow-box">
-        <h3>How PricePilot works</h3>
-        {rows}
-    </div>
-    """
     
-def render_dashboard(result):
-    summary = result["market_summary"]
-    rec = result["recommendation"]
-    explanation = result.get("explanation", "")
-    sim = result["simulation"].copy()
-    products_df = result["products"].copy()
-    parsed_prompt = result.get("parsed_prompt", {})
+    active_tab = result.get("active_tab", "overview")
 
-    product_query = result.get("product_query", "Product")
-    objective = parsed_prompt.get("objective", "maximize_revenue")
-    audience = parsed_prompt.get("audience")
-    positioning = parsed_prompt.get("positioning")
+    overview_checked = "checked" if active_tab == "overview" else ""
+    market_checked = "checked" if active_tab == "market" else ""
+    advisor_checked = "checked" if active_tab == "advisor" else ""
+    competitors_checked = "checked" if active_tab == "competitors" else ""
 
-    sim_html = make_simulation_table(sim)
-    chart_html = make_revenue_chart(sim, rec["recommended_price"])
-    products_html = make_products_table(products_df)
-    strategy_cards_html = make_strategy_cards(sim)
-    workflow_html = make_workflow_html(result)
+    advisor_plan_html = render_active_advisor_plan(result)
+
+    if not advisor_plan_html:
+        advisor_plan_html = """
+        <div class="card">
+          <h3>Advisor Plan</h3>
+          <div class="empty-advisor-plan">
+            <p><strong>No advisor plan selected yet.</strong></p>
+            <p class="small">
+              Use the Advisor Mode actions on the left to generate a bundle strategy,
+              30-day test plan, or risk review.
+            </p>
+          </div>
+        </div>
+        """
 
     return f"""
-    <div class="card">
-    <h2>Live Dashboard</h2>
-    <p class="small-note">Recommendation, revenue curve, scenarios, and competitors.</p>
+    <div class="dashboard-tabs">
+      <input class="tab-input" type="radio" name="dashboard-tab" id="tab-overview" {overview_checked}>
+      <input class="tab-input" type="radio" name="dashboard-tab" id="tab-market" {market_checked}>
+      <input class="tab-input" type="radio" name="dashboard-tab" id="tab-advisor" {advisor_checked}>
+      <input class="tab-input" type="radio" name="dashboard-tab" id="tab-competitors" {competitors_checked}>
 
-        <div class="mini-card">
-            <div class="metric-label">Product Search</div>
-            <div class="metric-value">{safe_text(product_query.title())}</div>
-            <p>
-                Objective: <strong>{safe_text(objective.replace("_", " ").title())}</strong><br>
-                Audience: <strong>{safe_text(audience or "Not specified")}</strong><br>
-                Positioning: <strong>{safe_text(positioning or "Not specified")}</strong>
-            </p>
-        </div>
+      <div class="tab-labels">
+        <label for="tab-overview">Overview</label>
+        <label for="tab-market">Market</label>
+        <label for="tab-advisor">Advisor Plan</label>
+        <label for="tab-competitors">Competitors</label>
+      </div>
 
-        <div class="recommendation">
-            <div class="metric-label">Recommended Price</div>
-            <div class="recommendation-price">{price(rec["recommended_price"])}</div>
-            <h2>{safe_text(product_query.title())}</h2>
-            <p>
-                Launch around <strong>{price(rec["recommended_price"])}</strong>.
-                This balances revenue and demand while positioning the product as a
-                <strong>{safe_text(rec["market_position"])}</strong> option.
-            </p>
+      <div class="tab-panels">
 
-            <div class="grid grid-3">
-                <div class="mini-card">
-                    <div class="metric-label">Revenue / Month</div>
-                    <div class="metric-value">{money(rec["expected_revenue"])}</div>
-                </div>
-                <div class="mini-card">
-                    <div class="metric-label">Conversion</div>
-                    <div class="metric-value">{percent(rec["conversion_rate"])}</div>
-                </div>
-                <div class="mini-card">
-                    <div class="metric-label">Customers / Month</div>
-                    <div class="metric-value">{int(rec["expected_customers"])}</div>
-                </div>
+        <div class="tab-panel" id="panel-overview">
+          <div class="card">
+            <h2>Launch Pricing Strategy</h2>
+            <p class="small">Built from the confirmed strategy profile.</p>
+
+            <div class="grid">
+              <div class="metric">
+                <div class="metric-label">Recommended Launch Price</div>
+                <div class="metric-value">{price(rec["recommended_price"])}</div>
+                <p class="small">Market position: {safe_text(rec["market_position"])}</p>
+              </div>
+
+              <div class="metric">
+                <div class="metric-label">Expected Revenue</div>
+                <div class="metric-value">{money(rec["expected_revenue"])}</div>
+                <p class="small">Per month</p>
+              </div>
+
+              <div class="metric">
+                <div class="metric-label">Demand Estimate</div>
+                <div class="metric-value">{percent(rec["conversion_rate"])}</div>
+                <p class="small">{int(rec["expected_customers"])} customers / month</p>
+              </div>
             </div>
-        </div>
+          </div>
 
-        <div class="section-card">
+          <div class="card">
+            <h3>Confirmed Strategy Profile</h3>
+            {canvas_row("Product", profile.get("product_query") or result.get("product_query"))}
+            {canvas_row("Customer", profile.get("audience"))}
+            {canvas_row("Positioning", profile.get("positioning"))}
+            {canvas_row("Differentiation", profile.get("differentiation"))}
+            {canvas_row("Goal", objective_label(profile.get("objective")))}
+            {canvas_row("Cost floor", cost_floor_text)}
+          </div>
+
+          <div class="card">
             <h3>Why this price works</h3>
-            <div class="agent-answer">
-                {markdown.markdown(explanation.strip(), extensions=["extra"])}
-            </div>
+            {markdown.markdown(explanation.strip(), extensions=["extra"])}
+            {guardrail_html}
+          </div>
         </div>
 
-        <div class="grid grid-3">
-            <div class="mini-card">
+        <div class="tab-panel" id="panel-market">
+          <div class="card">
+            <h2>Market Snapshot</h2>
+            <p class="small">Use this to compare the recommendation against observed market pricing.</p>
+
+            <div class="grid">
+              <div class="metric">
                 <div class="metric-label">Market Median</div>
                 <div class="metric-value">{price(summary["median_price"])}</div>
-            </div>
-            <div class="mini-card">
+              </div>
+              <div class="metric">
                 <div class="metric-label">Products Analyzed</div>
                 <div class="metric-value">{int(summary["num_products"])}</div>
-            </div>
-            <div class="mini-card">
+              </div>
+              <div class="metric">
                 <div class="metric-label">Price Range</div>
-                <div class="metric-value">{price(summary["min_price"])}–{price(summary["max_price"])}</div>
+                <div class="metric-value">{price(summary["min_price"])}-{price(summary["max_price"])}</div>
+              </div>
             </div>
-        </div>
+          </div>
 
-        <div class="section-card">
+          <div class="card">
             <h3>Revenue Curve</h3>
-            {chart_html}
-            <h3>Alternative Pricing Strategies</h3>
-            <p class="small-note">Compare growth, balanced, and revenue-maximizing options.</p>
-            {strategy_cards_html}
-            <h3>Top Price Scenarios</h3>
-            {sim_html}
+            {make_revenue_chart(sim, rec["recommended_price"])}
+          </div>
         </div>
-        
 
-        <div class="section-card">
-            <h3>Competitor Snapshot</h3>
-            {products_html}
+        <div class="tab-panel" id="panel-advisor">
+          {advisor_plan_html}
         </div>
-    </div>
 
-    <div class="section-card">
-        <button type="button" onclick="toggleWorkflow()" class="chip" id="workflow-btn">
-            Show agent workflow
-        </button>
-
-        <div id="workflow" style="display:none; margin-top:12px;">
-            {workflow_html}
+        <div class="tab-panel" id="panel-competitors">
+          <div class="card">
+            <h2>Competitor Snapshot</h2>
+            <p class="small">Representative products pulled from live shopping results.</p>
+            {make_products_table(products)}
+          </div>
         </div>
+
+      </div>
     </div>
     """
 
 
-def render_results_page(category, result, history, session_id):
-    history_value = encode_history(history)
-    dashboard_html = render_dashboard(result)
+def render_page(profile, phase, history, session_id="", result=None):
+    profile_value = encode_json(profile)
+    history_value = encode_json(history)
 
-    suggestions = suggested_questions(result, history)
+    chips = phase_chips(phase)
+    chips_html = render_chip_forms(chips, profile, phase, history, session_id)
 
-    suggestion_buttons = "".join(
-        f"""
-        <form action="/ask" method="post" style="display:inline;">
-            <input type="hidden" name="category" value="{safe_text(category)}">
-            <input type="hidden" name="history" value="{history_value}">
-            <input type="hidden" name="session_id" value="{session_id}">
-            <input type="hidden" name="question" value="{safe_text(q)}">
-            <button class="chip" type="submit">{safe_text(q)}</button>
-        </form>
+    right_side = render_dashboard(result) if result else render_strategy_canvas(profile)
+
+    if phase == "complete":
+        visible_history = compact_advisor_history(history)
+
+        archive_note = """
+        <div class="chat-archive-note">
+          Setup transcript is collapsed. Advisor Mode is focused on the current strategy.
+        </div>
         """
-        for q in suggestions
-    )
+
+        discussion_title = """
+        <div class="recent-discussion-title">
+          Recent advisor discussion
+        </div>
+        """
+
+        chat_body = f"""
+          {render_setup_progress(profile, phase)}
+          {archive_note}
+          {chips_html}
+          <div class="advisor-spacer"></div>
+          {discussion_title}
+          {render_history(visible_history)}
+        """
+    else:
+        chat_body = f"""
+          {render_setup_progress(profile, phase)}
+          {render_history(history)}
+          {chips_html}
+        """
 
     return f"""
+    <!DOCTYPE html>
     <html>
-        <head>
-            <title>PricePilot</title>
-            {STYLE}
-        </head>
-        <body>
-            {render_topbar()}
+      <head>
+        <title>PricePilot</title>
+        {STYLE}
+      </head>
+      <body>
+        {render_topbar()}
+        <div class="layout">
+          <section class="chat">
+            <div class="messages">
+              {chat_body}
+            </div>
 
-            <main class="app-container">
-                <section class="chat-panel">
-                    {render_history(history)}
+            <div class="input-area">
+              <form class="input-form" method="post" action="/chat">
+                <input type="text" name="message" placeholder="Ask a what-if or strategy question..." autofocus>
+                <input type="hidden" name="profile" value="{profile_value}">
+                <input type="hidden" name="phase" value="{safe_text(phase)}">
+                <input type="hidden" name="history" value="{history_value}">
+                <input type="hidden" name="session_id" value="{safe_text(session_id)}">
+                <button type="submit">Send</button>
+              </form>
+              <p class="small" style="text-align:center;">PricePilot builds launch pricing strategies from product context, market data, and constraints.</p>
+            </div>
+          </section>
 
-                    <div class="message-row">
-                        <div class="avatar">✦</div>
-                        <div class="bubble">
-                            <h2>Suggested next questions</h2>
-                            <div class="suggestions">
-                                {suggestion_buttons}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="bottom-input">
-                        <form class="bottom-input-inner" action="/ask" method="post">
-                            <input type="hidden" name="category" value="{safe_text(category)}">
-                            <input type="hidden" name="history" value="{history_value}">
-                            <input type="hidden" name="session_id" value="{session_id}">
-                            <input
-                                type="text"
-                                name="question"
-                                placeholder="Ask a follow-up pricing question..."
-                                required
-                            />
-                            <button type="submit">Send</button>
-                        </form>
-                    </div>
-                </section>
-
-                <aside class="dashboard-panel">
-                    {dashboard_html}
-                </aside>
-            </main>
-            <script>
-                function toggleWorkflow() {{
-                    const el = document.getElementById("workflow");
-                    const btn = document.getElementById("workflow-btn");
-
-                    if (!el) return;
-
-                    if (el.style.display === "none") {{
-                        el.style.display = "block";
-                        if (btn) btn.innerText = "Hide agent workflow";
-                    }} else {{
-                        el.style.display = "none";
-                        if (btn) btn.innerText = "Show agent workflow";
-                    }}
-                }}
-            </script>
-        </body>
+          <section class="dashboard">
+            {right_side}
+          </section>
+        </div>
+      </body>
     </html>
     """
+
+
+def ask_current_phase(profile, phase, history):
+    history.append({"role": "agent", "content": phase_question(phase, profile)})
+    return history
+
+
+def run_strategy(profile):
+    context = profile_to_context(profile)
+    result = run_pricing_agent(context)
+
+    if not result.get("error"):
+        result["strategy_profile"] = profile
+
+    return result
+
+
+def edit_phase_from_message(message):
+    lower = message.lower()
+
+    if "customer" in lower:
+        return "audience"
+    if "position" in lower:
+        return "positioning"
+    if "goal" in lower:
+        return "objective"
+    if "constraint" in lower or "floor" in lower:
+        return "constraints"
+
+    return None
 
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return f"""
-    <html>
-        <head>
-            <title>PricePilot</title>
-            {STYLE}
-        </head>
-        <body>
-            {render_topbar()}
+    profile = blank_profile()
+    phase = "product"
 
-            <main class="home-page">
-                <div class="message-row">
-                    <div class="avatar">✦</div>
-                    <div class="bubble">
-                        <h1>What should you charge?</h1>
-                        <p>
-                            Describe your product, audience, and pricing goal. PricePilot will search the market,
-                            simulate revenue, and recommend a pricing strategy.
-                        </p>
-                    </div>
-                </div>
+    history = [
+        {
+            "role": "agent",
+            "content": "Hi — I’m your Pricing Strategy Agent. I’ll guide you through a short strategy setup, then build a launch pricing recommendation.",
+        },
+        {
+            "role": "agent",
+            "content": phase_question(phase, profile),
+        },
+    ]
 
-                <div class="prompt-card">
-                    <form action="/analyze" method="post">
-                        <textarea
-                            name="category"
-                            placeholder="Example: What price should I charge for wireless headphones?"
-                            required
-                        >What price should I charge for wireless headphones?</textarea>
-
-                        <div style="display:flex; justify-content:flex-end; margin-top:12px;">
-                            <button type="submit">Analyze Pricing →</button>
-                        </div>
-                    </form>
-
-                    <div class="examples">
-                        <span class="chip" onclick="fillExample('What price should I charge for wireless headphones?')">
-                            What price should I charge for wireless headphones?
-                        </span>
-
-                        <span class="chip" onclick="fillExample('How should I price sustainable sneakers for eco-conscious millennials?')">
-                            How should I price sustainable sneakers for eco-conscious millennials?
-                        </span>
-
-                        <span class="chip" onclick="fillExample('I sell a budget standing desk for remote workers. What price helps me grow fast?')">
-                            I sell a budget standing desk for remote workers. What price helps me grow fast?
-                        </span>
-
-                        <span class="chip" onclick="fillExample('I sell premium skincare and want luxury positioning. What price should I charge?')">
-                            I sell premium skincare and want luxury positioning. What price should I charge?
-                        </span>
-
-                        <span class="chip" onclick="fillExample('How should I price a productivity SaaS tool with three tiers?')">
-                            How should I price a productivity SaaS tool with three tiers?
-                        </span>
-                    </div>
-
-                    <p class="small-note">
-                        You can include product, audience, goal, positioning, price range, COGS, or assumptions.
-                    </p>
-                </div>
-            </main>
-
-            <script>
-                function fillExample(value) {{
-                    document.querySelector('textarea[name="category"]').value = value;
-                }}
-            </script>
-
-            <script>
-                function fillExample(value) {{
-                    document.querySelector('textarea[name="category"]').value = value;
-                }}
-
-                function toggleWorkflow() {{
-                    const el = document.getElementById("workflow");
-                    const btn = document.getElementById("workflow-btn");
-
-                    if (!el) return;
-
-                    if (el.style.display === "none") {{
-                        el.style.display = "block";
-                        btn.innerText = "Hide agent workflow";
-                    }} else {{
-                        el.style.display = "none";
-                        btn.innerText = "Show agent workflow";
-                    }}
-                }}
-            </script>
-        </body>
-    </html>
-    """
+    return render_page(profile=profile, phase=phase, history=history)
 
 
 @app.post("/analyze", response_class=HTMLResponse)
 def analyze(category: str = Form(...)):
-    try:
-        result = run_pricing_agent(category)
-    except Exception as e:
-        result = {"error": str(e)}
-
-    if "error" in result:
-        return f"""
-        <html>
-            <head>
-                <title>PricePilot</title>
-                {STYLE}
-            </head>
-            <body>
-                {render_topbar()}
-                <main class="home-page">
-                    <div class="message-row user">
-                        <div class="user-bubble">{safe_text(category)}</div>
-                        <div class="avatar user-avatar">👤</div>
-                    </div>
-
-                    <div class="message-row">
-                        <div class="avatar">✦</div>
-                        <div class="bubble">
-                            <h2>I need a little more information.</h2>
-                            <p>{safe_text(result["error"])}</p>
-                            <a class="button" href="/">Try another prompt</a>
-                        </div>
-                    </div>
-                </main>
-            </body>
-        </html>
-        """
-
-    rec = result["recommendation"]
-    product_query = result.get("product_query", category)
-
-    summary_text = (
-        f"✅ **Recommendation:** Charge **{price(rec['recommended_price'])}** "
-        f"for **{product_query.title()}**.\n\n"
-        f"This price is expected to generate **{money(rec['expected_revenue'])}/month** "
-        f"at an estimated **{percent(rec['conversion_rate'])} conversion rate**.\n\n"
-        f"It positions the product as a **{rec['market_position']}** option."
-    )
+    profile = blank_profile()
+    phase = "product"
     history = [
+        {
+            "role": "agent",
+            "content": "Hi — I’m your Pricing Strategy Agent. I’ll turn your product idea into a launch pricing strategy.",
+        },
         {"role": "user", "content": category},
-        {"role": "agent", "content": summary_text},
     ]
 
-    session_id = str(uuid.uuid4())
-    RESULT_CACHE[session_id] = result
+    profile = apply_message_to_profile(profile, phase, category)
+    phase = next_phase(profile)
+    history = ask_current_phase(profile, phase, history)
 
-    return render_results_page(category, result, history, session_id)
+    return render_page(profile=profile, phase=phase, history=history)
+
+
+
+def advisor_response(message, result):
+    lower = message.lower()
+    profile = result.get("strategy_profile", {})
+    rec = result["recommendation"]
+    summary = result["market_summary"]
+
+    product = clean_value(profile.get("product_query") or result.get("product_query"), "the product")
+    customer = clean_value(profile.get("audience"), "the target customer")
+    base_price = float(rec["recommended_price"])
+    cost_floor = float(profile.get("cost_floor") or 0)
+
+    bundle_price = base_price * 1.15
+    premium_bundle_price = base_price * 1.30
+
+    if "bundle" in lower:
+        return f"""
+**Recommended action: Bundle strategy**
+
+**Base product:** {price(base_price)}
+
+**Starter bundle:** {price(bundle_price)}  
+Use this as the main upsell. Include low-cost accessories, setup guidance, or essentials that help {customer} get started faster.
+
+**Premium bundle:** {price(premium_bundle_price)}  
+Use this to capture customers with higher willingness to pay. Add stronger accessories, service, support, or a more complete setup.
+
+**Why this works:**  
+The base price keeps the product accessible, while bundles lift average order value without weakening the core launch price.
+
+**What to test:**  
+Compare base-only conversion against starter-bundle conversion and average order value.
+"""
+
+    if "risk" in lower:
+        risks = [
+            "The competitor data may include products that are not perfect substitutes.",
+            "Premium positioning needs clear proof of value, otherwise customers may compare only on price.",
+            "A lower price could improve conversion but weaken quality perception.",
+            "A higher price could improve revenue per order but reduce early adoption.",
+        ]
+
+        if profile.get("cost_floor"):
+            risks.append("The cost floor protects margin, but it limits how aggressive growth pricing can be.")
+
+        risk_text = "\n".join([f"- {risk}" for risk in risks])
+
+        return f"""
+**Strategic risk review**
+
+The biggest risks for **{product}** are:
+
+{risk_text}
+
+**Most important validation:**  
+Before committing to this price, test whether {customer} clearly understand why this product is better, safer, easier, or more specialized than nearby alternatives.
+
+**Decision rule:**  
+If conversion is weak but engagement is strong, adjust messaging before cutting price. If conversion is weak and engagement is weak, revisit positioning.
+"""
+
+    if "30 days" in lower or "test" in lower or "experiment" in lower:
+        low_price = max(base_price * 0.92, cost_floor)
+        high_price = base_price * 1.08
+
+        return f"""
+**30-day launch test plan**
+
+**Test 1: Price sensitivity**  
+Compare **{price(low_price)}**, **{price(base_price)}**, and **{price(high_price)}**.
+
+**Test 2: Messaging**  
+Run two versions of the product page:
+- Value-focused: emphasizes price-to-quality ratio
+- Specialist-focused: emphasizes expertise, reliability, and fit for {customer}
+
+**Test 3: Bundle demand**  
+Compare the base product at **{price(base_price)}** against a starter bundle around **{price(bundle_price)}**.
+
+**Metrics to track:**  
+Conversion rate, revenue per visitor, average order value, add-to-cart rate, and refund/return rate.
+
+**Best next decision:**  
+Keep the price that produces the best revenue per visitor, not just the highest conversion rate.
+"""
+
+    if "competitor" in lower or "market" in lower:
+        return f"""
+**Market read**
+
+The market median is **{price(summary["median_price"])}**, with observed prices from **{price(summary["min_price"])}** to **{price(summary["max_price"])}**.
+
+Your recommended price of **{price(base_price)}** is not just a math output. It should be interpreted through the strategy profile:
+
+- Customer: **{customer}**
+- Positioning: **{clean_value(profile.get("positioning"))}**
+- Differentiation: **{clean_value(profile.get("differentiation"))}**
+
+**Strategic implication:**  
+The main question is not “Are we cheaper than the market?” The better question is whether customers can immediately understand why this product deserves its price compared with nearby alternatives.
+"""
+
+    if "discount" in lower:
+        discount_price = max(base_price * 0.90, cost_floor)
+
+        return f"""
+**Discount recommendation**
+
+I would avoid making a discount the main strategy. A permanent discount can train customers to wait for lower prices.
+
+**Better approach:**  
+Launch at **{price(base_price)}**, but test a short intro offer around **{price(discount_price)}**.
+
+**Why:**  
+This creates urgency while protecting the long-term reference price.
+
+**Guardrail:**  
+Do not discount below your cost floor or below a price that damages perceived quality.
+"""
+
+    return generate_business_explanation(
+        category=result.get("product_query", "product"),
+        market_summary=result["market_summary"],
+        recommendation=result["recommendation"],
+        objective=result.get("parsed_prompt", {}).get("objective", "maximize_revenue"),
+        question=message,
+    )
+
+
+@app.post("/chat", response_class=HTMLResponse)
+def chat(
+    message: str = Form(...),
+    profile: str = Form(""),
+    phase: str = Form("product"),
+    history: str = Form(""),
+    session_id: str = Form(""),
+):
+    profile_data = decode_json(profile, blank_profile())
+    chat_history = decode_json(history, [])
+
+    message = message.strip()
+    chat_history.append({"role": "user", "content": message})
+
+    existing_result = RESULT_CACHE.get(session_id) if session_id else None
+
+    if existing_result:
+        lower = message.lower()
+        revised_profile = profile_data.copy()
+        changed_strategy = False
+
+        new_objective = objective_from_text(message)
+        if new_objective:
+            revised_profile["objective"] = new_objective
+            changed_strategy = True
+
+        new_positioning = positioning_from_text(message)
+        if new_positioning:
+            revised_profile["positioning"] = new_positioning
+            changed_strategy = True
+
+        cost_floor = extract_cost_floor(message)
+        if cost_floor:
+            revised_profile["cost_floor"] = cost_floor
+            revised_profile["constraints_answered"] = True
+            changed_strategy = True
+
+        if "no hard constraint" in lower or "remove cost floor" in lower:
+            revised_profile["cost_floor"] = None
+            revised_profile["constraints_answered"] = True
+            changed_strategy = True
+
+        if changed_strategy:
+            result = run_strategy(revised_profile)
+
+            if result.get("error"):
+                chat_history.append({
+                    "role": "agent",
+                    "content": f"I tried to update the scenario, but ran into this issue: {result['error']}",
+                })
+                return render_page(revised_profile, "complete", chat_history, session_id, existing_result)
+
+            result["advisor_plan"] = None
+            result["active_tab"] = "overview"
+            RESULT_CACHE[session_id] = result
+            rec = result["recommendation"]
+
+            strategy_change = []
+            if new_objective:
+                strategy_change.append(f"goal changed to **{objective_label(new_objective)}**")
+            if new_positioning:
+                strategy_change.append(f"positioning changed to **{new_positioning}**")
+            if cost_floor:
+                strategy_change.append(f"cost floor set to **{price(cost_floor)}**")
+
+            change_text = ", ".join(strategy_change) if strategy_change else "the scenario changed"
+
+            chat_history.append({
+                "role": "agent",
+                "content": (
+                    f"Got it. I updated the strategy because {change_text}.\n\n"
+                    f"**Updated recommendation:** {price(rec['recommended_price'])}\n\n"
+                    f"Expected revenue is about **{money(rec['expected_revenue'])}/month** "
+                    f"at an estimated **{percent(rec['conversion_rate'])} conversion rate**.\n\n"
+                    f"I refreshed the dashboard on the right."
+                ),
+            })
+
+            return render_page(revised_profile, "complete", chat_history, session_id, result)
+
+        answer = advisor_response(message, existing_result)
+        plan = advisor_plan_from_message(message, existing_result)
+
+        if plan:
+            existing_result["advisor_plan"] = plan
+            existing_result["active_tab"] = "advisor"
+            RESULT_CACHE[session_id] = existing_result
+
+        chat_history.append({"role": "agent", "content": answer})
+        return render_page(profile_data, "complete", chat_history, session_id, existing_result)
+
+    if phase == "confirm":
+        edit_phase = edit_phase_from_message(message)
+
+        if edit_phase:
+            phase = edit_phase
+            chat_history = ask_current_phase(profile_data, phase, chat_history)
+            return render_page(profile_data, phase, chat_history, session_id)
+
+        if "build" in message.lower() or "looks right" in message.lower():
+            result = run_strategy(profile_data)
+
+            if result.get("error"):
+                chat_history.append({
+                    "role": "agent",
+                    "content": f"I ran into an issue: {result['error']}",
+                })
+                return render_page(profile_data, phase, chat_history)
+
+            result["advisor_plan"] = None
+            result["active_tab"] = "overview"
+            rec = result["recommendation"]
+
+            chat_history.append({
+                "role": "agent",
+                "content": (
+                    f"Great. I built the launch pricing strategy from the confirmed profile.\n\n"
+                    f"**Recommendation:** launch around **{price(rec['recommended_price'])}**.\n\n"
+                    f"Expected revenue is about **{money(rec['expected_revenue'])}/month** "
+                    f"at an estimated **{percent(rec['conversion_rate'])} conversion rate**.\n\n"
+                    f"You can now ask me to pressure-test the strategy, build a bundle, change the goal, or run a what-if scenario."
+                ),
+            })
+
+            session_id = str(uuid.uuid4())
+            RESULT_CACHE[session_id] = result
+
+            return render_page(profile_data, "complete", chat_history, session_id, result)
+
+    profile_data = apply_message_to_profile(profile_data, phase, message)
+    phase = next_phase(profile_data)
+
+    if phase == "confirm":
+        cost_floor_text = (
+            price(profile_data["cost_floor"])
+            if profile_data.get("cost_floor")
+            else "No hard constraint"
+        )
+
+        confirm_text = (
+            f"Here’s the strategy profile I’ll use:\n\n"
+            f"**Product:** {clean_value(profile_data.get('product_query'))}\n\n"
+            f"**Customer:** {clean_value(profile_data.get('audience'))}\n\n"
+            f"**Positioning:** {clean_value(profile_data.get('positioning'))}\n\n"
+            f"**Differentiation:** {clean_value(profile_data.get('differentiation'))}\n\n"
+            f"**Goal:** {objective_label(profile_data.get('objective'))}\n\n"
+            f"**Cost floor:** {cost_floor_text}\n\n"
+            f"Does this look right?"
+        )
+
+        chat_history.append({"role": "agent", "content": confirm_text})
+        return render_page(profile_data, phase, chat_history, session_id)
+
+    chat_history = ask_current_phase(profile_data, phase, chat_history)
+
+    return render_page(profile_data, phase, chat_history, session_id)
 
 
 @app.post("/ask", response_class=HTMLResponse)
 def ask(
     question: str = Form(...),
-    category: str = Form(...),
+    category: str = Form(""),
     history: str = Form(""),
     session_id: str = Form(""),
 ):
-    chat_history = decode_history(history)
+    profile = blank_profile()
+    chat_history = decode_json(history, [])
     chat_history.append({"role": "user", "content": question})
 
     result = RESULT_CACHE.get(session_id)
 
-    if result is None:
-        answer = "I lost the previous pricing analysis. Please start a new analysis."
-        chat_history.append({"role": "agent", "content": answer})
-        return render_results_page(category, run_pricing_agent(category), chat_history, session_id)
-
-    original_objective = result.get("parsed_prompt", {}).get("objective", "maximize_revenue")
-
-    q = question.lower()
-
-    if any(word in q for word in ["growth", "customers", "acquire", "initial", "volume"]):
-        objective = "maximize_growth"
-    elif any(word in q for word in ["premium", "high-end", "luxury"]):
-        objective = "premium_positioning"
-    elif any(word in q for word in ["competitive", "market", "entry"]):
-        objective = "competitive_entry"
-    else:
-        objective = original_objective
+    if not result:
+        chat_history.append({"role": "agent", "content": "I lost the previous pricing analysis. Please start a new strategy setup."})
+        return render_page(profile, "product", chat_history)
 
     answer = generate_business_explanation(
-        category=result.get("product_query", category),
+        category=result.get("product_query", "product"),
         market_summary=result["market_summary"],
         recommendation=result["recommendation"],
-        objective=objective,
+        objective=result.get("parsed_prompt", {}).get("objective", "maximize_revenue"),
         question=question,
     )
 
-    formatted_answer = answer
-
-    chat_history.append({"role": "agent", "content": formatted_answer})
-
-    return render_results_page(category, result, chat_history, session_id)
+    chat_history.append({"role": "agent", "content": answer})
+    return render_page(result.get("strategy_profile", profile), "complete", chat_history, session_id, result)
