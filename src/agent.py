@@ -7,7 +7,7 @@ from src.recommendation import recommend_price
 from src.llm_reasoning import generate_business_explanation
 from src.refresh_data import fetch_google_shopping_results
 from src.prompt_parser import parse_pricing_prompt
-
+from src.scraper import get_real_saas_pricing_data
 
 def build_strategy_profile(parsed):
     return {
@@ -258,23 +258,24 @@ def run_pricing_agent(category):
     if cost_floor:
         steps.append(f"Detected price floor / cost constraint: ${cost_floor:.2f}")
 
-    rows = fetch_google_shopping_results(product_query)
+    try:
+        rows = fetch_google_shopping_results(product_query)
+    except Exception as e:
+        rows = []
+        steps.append(f"Live search failed, using fallback demo data instead: {e}")
 
-    if not rows:
-        return {
-            "error": "No live product data found. Try a broader product search like 'wireless headphones', 'standing desk', or 'protein powder'.",
-            "steps": steps,
-            "parsed_prompt": parsed,
-            "strategy_profile": strategy_profile,
-            "product_query": product_query,
-            "user_prompt": user_prompt,
-        }
-
-    category_df = pd.DataFrame(rows)
+    if rows:
+        category_df = pd.DataFrame(rows)
+        steps.append(f"Fetched {len(category_df)} live products from Google Shopping.")
+    else:
+        category_df = get_real_saas_pricing_data()
+        steps.append(
+            "Live market data was unavailable, so the agent used curated demo competitor data."
+        )
 
     if category_df.empty:
         return {
-            "error": "No usable products found from the live search.",
+            "error": "No usable product data found. Try a broader product category.",
             "steps": steps,
             "parsed_prompt": parsed,
             "strategy_profile": strategy_profile,
@@ -282,7 +283,6 @@ def run_pricing_agent(category):
             "user_prompt": user_prompt,
         }
 
-    steps.append(f"Fetched {len(category_df)} live products from Google Shopping.")
     steps.append("Calculated market pricing benchmarks.")
 
     market_summary = summarize_market(category_df)
