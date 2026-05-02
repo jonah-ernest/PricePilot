@@ -32,41 +32,47 @@ def generate_business_explanation(
     median_price = market_summary["median_price"]
     market_position = recommendation["market_position"]
 
+    expected_revenue = float(recommendation["expected_revenue"])
+    conversion_rate = float(recommendation["conversion_rate"])
+
     if objective == "maximize_growth":
         fallback = (
-            f"Direct answer: ${recommended_price} is recommended because it is optimized for customer growth, not maximum revenue.\n\n"
-            f"Why:\n"
-            f"• The lower price supports a higher conversion rate of {recommendation['conversion_rate']:.2%}.\n"
-            f"• It is positioned as a {market_position} option compared with the market median of ${median_price:.2f}.\n\n"
-            f"Tradeoff: A higher price may produce more revenue per sale, but it could reduce customer volume.\n\n"
-            f"Next step: Test ${recommended_price} against a slightly higher price to compare growth and revenue."
+            f"**Direct answer:** ${recommended_price} is recommended because it is optimized for customer growth, not maximum revenue.\n\n"
+            f"**Why:**\n"
+            f"- The lower price supports a higher conversion rate of {conversion_rate:.2%}.\n"
+            f"- It is positioned as a {market_position} option compared with the market median of ${median_price:.2f}.\n\n"
+            f"**Tradeoff:** A higher price may produce more revenue per sale, but it could reduce customer volume.\n\n"
+            f"**Next step:** Test ${recommended_price} against a slightly higher price to compare growth and revenue."
         )
+
     elif objective == "premium_positioning":
         fallback = (
-            f"Direct answer: ${recommended_price} is recommended because it supports a premium market position.\n\n"
-            f"Why:\n"
-            f"• The price is above the market median of ${median_price:.2f}.\n"
-            f"• Premium pricing can support stronger margins and brand positioning.\n\n"
-            f"Tradeoff: A higher price may reduce conversion among budget-conscious buyers.\n\n"
-            f"Next step: Test this price against a mid-market option to measure conversion loss."
+            f"**Direct answer:** ${recommended_price} is recommended because it supports a premium market position.\n\n"
+            f"**Why:**\n"
+            f"- The price is above the market median of ${median_price:.2f}.\n"
+            f"- Premium pricing can support stronger margins and brand positioning.\n\n"
+            f"**Tradeoff:** A higher price may reduce conversion among budget-conscious buyers.\n\n"
+            f"**Next step:** Test this price against a mid-market option to measure conversion loss."
         )
+
     elif objective == "competitive_entry":
         fallback = (
-            f"Direct answer: ${recommended_price} is recommended as an entry price below the market median.\n\n"
-            f"Why:\n"
-            f"• It positions the product below the median competitor price of ${median_price:.2f}.\n"
-            f"• This can help attract customers who are comparing similar products.\n\n"
-            f"Tradeoff: Entering too low may make the product feel less premium.\n\n"
-            f"Next step: Test this price against the market median to compare conversion and revenue."
+            f"**Direct answer:** ${recommended_price} is recommended as an entry price below the market median.\n\n"
+            f"**Why:**\n"
+            f"- It positions the product below the median competitor price of ${median_price:.2f}.\n"
+            f"- This can help attract customers who are comparing similar products.\n\n"
+            f"**Tradeoff:** Entering too low may make the product feel less premium.\n\n"
+            f"**Next step:** Test this price against the market median to compare conversion and revenue."
         )
+
     else:
         fallback = (
-            f"Direct answer: ${recommended_price} is recommended because it has the strongest expected revenue in the simulation.\n\n"
-            f"Why:\n"
-            f"• It is expected to generate ${recommendation['expected_revenue']} per month.\n"
-            f"• It balances price and conversion at an estimated {recommendation['conversion_rate']:.2%} conversion rate.\n\n"
-            f"Tradeoff: This price may not maximize customer count if a lower growth-focused price is used.\n\n"
-            f"Next step: Test this price against nearby prices to validate the revenue estimate."
+            f"**Direct answer:** ${recommended_price} is recommended because it has the strongest expected revenue in the simulation.\n\n"
+            f"**Why:**\n"
+            f"- It is expected to generate ${expected_revenue:,.0f} per month.\n"
+            f"- It balances price and conversion at an estimated {conversion_rate:.2%} conversion rate.\n\n"
+            f"**Tradeoff:** This price may not maximize customer count if a lower growth-focused price is used.\n\n"
+            f"**Next step:** Test this price against nearby prices to validate the revenue estimate."
         )
 
     try:
@@ -104,6 +110,18 @@ Critical instruction:
 - Do NOT claim this is the highest revenue price unless objective is maximize_revenue.
 - Do NOT say "maximize revenue" when objective is maximize_growth.
 
+Formatting rules:
+- Return markdown only.
+- Use exactly these sections in this order:
+  **Direct answer:**
+  **Why:**
+  **Tradeoff:**
+  **Next step:**
+- Under "Why", use exactly 2 short dash bullets.
+- Do not use inline bullet dots like "•" inside a paragraph.
+- Keep each section concise.
+- Do not repeat the guardrail note verbatim if it is shown separately in the UI.
+
 Use this exact answer structure:
 
 **Direct answer:** 1 clear sentence.
@@ -133,7 +151,6 @@ Rules:
     except Exception:
         return fallback
 
-
 def generate_followup_suggestions(category, market_summary, recommendation, objective=None):
     price = recommendation.get("recommended_price", "the recommended price")
     position = recommendation.get("market_position", "market")
@@ -152,3 +169,66 @@ def generate_followup_suggestions(category, market_summary, recommendation, obje
         f"Why is this a {position} price?",
         "Should I launch with a discount?",
     ]
+
+
+def generate_followup_questions_after_analysis(
+    strategy_profile,
+    market_summary,
+    recommendation,
+    max_questions=6,
+):
+    """
+    Generate contextual follow-up questions a founder or pricing analyst
+    might ask after seeing the pricing recommendation.
+    """
+
+    fallback_questions = [
+        "Why is this the right launch price?",
+        "Are we priced too low compared to the market?",
+        "What should we test first?",
+        "What are the biggest risks?",
+        "Build a 30-day launch test plan",
+        "Build a bundle strategy",
+    ]
+
+    try:
+        prompt = f"""
+You are a pricing strategy advisor helping a founder interpret a launch pricing recommendation.
+
+Generate {max_questions} short follow-up questions the user might naturally ask next.
+
+Use the actual strategy and market context below.
+
+Strategy profile:
+{strategy_profile}
+
+Market summary:
+{market_summary}
+
+Recommendation:
+{recommendation}
+
+Rules:
+- Return only a JSON list of strings.
+- Each question should be short and clickable as a chatbot suggestion.
+- Make the questions specific to the pricing recommendation.
+- Include a mix of explanation, risk, testing, market comparison, and strategy iteration.
+- Do not include numbering.
+- Do not include markdown.
+"""
+
+        # Reuse whatever LLM call pattern already exists in this file.
+        # If your file has a helper like call_llm(), use that here.
+        response = call_llm(prompt)
+
+        questions = json.loads(response)
+
+        if isinstance(questions, list):
+            cleaned = [str(q).strip() for q in questions if str(q).strip()]
+            if cleaned:
+                return cleaned[:max_questions]
+
+    except Exception:
+        pass
+
+    return fallback_questions[:max_questions]
