@@ -1,6 +1,9 @@
-pandas
 fastapi
 uvicorn
-pandas
 python-multipart
-openai
+pandas
+requests
+python-dotenv
+markdown
+groq
+google-genai
