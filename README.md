@@ -216,13 +216,21 @@ Create a `.env` file:
 touch .env
 ```
 
-Optional API keys:
+PricePilot can run without API keys because fallback logic is included for demo reliability. For the full experience, add these keys to your `.env` file:
 
 ```bash
 SERPAPI_KEY=your_serpapi_key
 GROQ_API_KEY=your_groq_key
 GEMINI_API_KEY=your_gemini_key
 ```
+
+What each key enables:
+
+- `SERPAPI_KEY`: live Google Shopping competitor price lookup
+- `GROQ_API_KEY`: LLM-based structured prompt parsing
+- `GEMINI_API_KEY`: LLM-generated pricing explanation and advisor responses
+
+If these keys are missing, the app still runs using fallback competitor data, fallback parsing, and fallback explanation logic.
 
 Run the app:
 
@@ -235,6 +243,7 @@ Open:
 ```text
 http://localhost:8000
 ```
+
 ## Future Improvements
 
 - Save previous pricing analyses for each user
