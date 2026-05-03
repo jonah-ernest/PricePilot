@@ -25,29 +25,12 @@ The agent helps answer questions like:
 - Chatbot-style strategy intake
 - Structured parsing of the user’s product, target audience, positioning, and pricing goal
 - Live competitor price lookup using Google Shopping / SerpApi when available
-- Fallback competitor dataset for reliable demos
 - Market benchmark summary with competitor price range and median price
 - Revenue simulation across possible price points
 - Recommended launch price with reasoning
 - Advisor-mode follow-up answers
 - 30-day pricing test plan
 - Clean visual UI with pricing cards, market snapshot, competitor table, and revenue curve
-
-## Example Demo Prompt
-
-```text
-I am launching wireless headphones for budget-conscious college students. 
-They have long battery life, comfortable fit, and decent noise cancellation. 
-I want to grow quickly and gain market share.
-```
-
-PricePilot returns:
-
-- a recommended launch price
-- competitor pricing context
-- expected customer/revenue simulation
-- reasoning behind the recommendation
-- suggested next pricing tests
 
 ## How the Agent Works
 
@@ -62,9 +45,9 @@ PricePilot follows a multi-step agent workflow:
    - File reference: `src/prompt_parser.py`
 
 3. **Market Data Collection**
-   - The agent attempts to collect live competitor pricing data.
-   - If live data is unavailable, it uses fallback demo data so the app still works.
-   - File references: `src/refresh_data.py`, `src/scraper.py`, `src/build_dataset.py`
+   - The agent attempts to collect live competitor pricing data from Google Shopping using SerpApi.
+   - If live data is unavailable or the API key is missing, the app falls back to curated public competitor pricing data so the demo still works.
+   - File references: `src/refresh_data.py`, `src/agent.py`, `src/scraper.py`
 
 4. **Market Benchmarking**
    - The agent calculates competitor price range, median price, and positioning context.
