@@ -2,11 +2,11 @@
 
 PricePilot is an AI pricing strategy agent that helps founders and small ecommerce teams choose a launch price using competitor market data, revenue simulation, and LLM-based pricing reasoning.
 
-Instead of forcing users to manually search competitor prices and guess a price point, PricePilot combines market benchmarking, pricing simulation, and advisor-style follow-up questions into one workflow.
+Instead of forcing users to manually search competitor prices and guess a price point, PricePilot combines market benchmarking, pricing simulation, guardrailed recommendation logic, and advisor-style follow-up questions into one workflow.
 
 ## Live Demo
 
-Live URL: **PASTE DEPLOYED URL HERE**
+Live URL:
 
 ## Product Overview
 
@@ -22,23 +22,25 @@ The agent helps answer questions like:
 
 ## Key Features
 
-- Chatbot-style strategy intake
-- Structured parsing of the user’s product, target audience, positioning, and pricing goal
+- Chatbot-style pricing strategy intake
+- Structured parsing of the user’s product, audience, positioning, and pricing goal
 - Live competitor price lookup using Google Shopping / SerpApi when available
 - Market benchmark summary with competitor price range and median price
 - Revenue simulation across possible price points
-- Recommended launch price with reasoning
+- Objective-based launch price recommendation
+- Guardrails for cost floors and premium positioning
+- LLM-generated explanation of the recommendation
 - Advisor-mode follow-up answers
 - 30-day pricing test plan
-- Clean visual UI with pricing cards, market snapshot, competitor table, and revenue curve
+- Visual UI with pricing cards, market snapshot, competitor table, and revenue curve
 
 ## How the Agent Works
 
 PricePilot follows a multi-step agent workflow:
 
 1. **User Strategy Intake**
-   - The user describes the product, audience, features, and pricing goal.
-   - File references: `main.py`, `src/chat_planner.py`
+   - The user describes the product, target audience, features, and pricing goal.
+   - File reference: `main.py`
 
 2. **Prompt Parsing**
    - The natural language prompt is converted into structured pricing fields.
@@ -50,15 +52,15 @@ PricePilot follows a multi-step agent workflow:
    - File references: `src/refresh_data.py`, `src/agent.py`, `src/scraper.py`
 
 4. **Market Benchmarking**
-   - The agent calculates competitor price range, median price, and positioning context.
-   - File references: `src/agent.py`, `src/recommendation.py`
+   - The agent calculates competitor price range, median price, average price, product count, ratings, and review context.
+   - File references: `src/benchmarking.py`, `src/agent.py`
 
 5. **Revenue Simulation**
    - The app simulates expected conversion, customer volume, and monthly revenue across different price points.
    - File reference: `src/simulation.py`
 
 6. **Pricing Recommendation**
-   - The agent recommends a launch price based on the user’s objective, market data, and simulated revenue.
+   - The agent recommends a launch price based on the user’s objective, market data, simulated revenue, and guardrails.
    - File references: `src/recommendation.py`, `src/agent.py`
 
 7. **LLM Reasoning**
@@ -66,8 +68,8 @@ PricePilot follows a multi-step agent workflow:
    - File reference: `src/llm_reasoning.py`
 
 8. **Advisor Follow-Up**
-   - Users can ask follow-up questions about pricing tests, positioning, risk, and launch strategy.
-   - File references: `src/chat_planner.py`, `src/llm_reasoning.py`, `main.py`
+   - Users can ask follow-up questions about pricing tests, positioning, risk, launch strategy, and 30-day plans.
+   - File references: `main.py`, `src/llm_reasoning.py`
 
 ## Project Architecture
 
@@ -75,7 +77,7 @@ PricePilot follows a multi-step agent workflow:
 PricePilot/
 │
 ├── main.py
-│   └── FastAPI app, frontend UI, API routes
+│   └── FastAPI app, frontend UI, API routes, chatbot/advisor flow
 │
 ├── src/
 │   ├── agent.py
@@ -85,107 +87,106 @@ PricePilot/
 │   │   └── Converts user input into structured pricing context
 │   │
 │   ├── refresh_data.py
-│   │   └── Pulls live market data when API keys are available
+│   │   └── Pulls live Google Shopping market data when API keys are available
 │   │
 │   ├── scraper.py
-│   │   └── Scraping / search helper logic
+│   │   └── Curated fallback competitor pricing data
 │   │
-│   ├── build_dataset.py
-│   │   └── Builds or refreshes competitor pricing data
+│   ├── benchmarking.py
+│   │   └── Market summary statistics and competitor benchmarks
 │   │
 │   ├── simulation.py
 │   │   └── Revenue and demand simulation logic
 │   │
 │   ├── recommendation.py
-│   │   └── Pricing recommendation and guardrail logic
+│   │   └── Objective-based pricing recommendation logic
 │   │
-│   ├── llm_reasoning.py
-│   │   └── LLM-generated pricing explanation
-│   │
-│   ├── chat_planner.py
-│   │   └── Advisor-style follow-up planning
-│   │
-│   └── benchmarking.py
-│       └── Evaluation / benchmarking helpers
+│   └── llm_reasoning.py
+│       └── LLM-generated pricing explanation and advisor responses
 ```
 
 ## Class Concepts Used
 
-### 1. Agent orchestration
+### 1. Agent orchestration / agent loop
 
-PricePilot is structured as an agent pipeline rather than a single prompt. The system coordinates user intake, structured parsing, market data collection, simulation, recommendation, and LLM explanation.
-
-File references:
-
-- `src/agent.py`
-- `main.py`
-
-### 2. Tool use and external data retrieval
-
-The agent can use external market data from Google Shopping / SerpApi. This lets the recommendation be grounded in competitor prices instead of only relying on the LLM.
+PricePilot uses an agent-style workflow instead of a single LLM prompt. The main orchestration happens in `run_pricing_agent()`, which coordinates parsing, data retrieval, benchmarking, simulation, recommendation, guardrails, and LLM explanation.
 
 File references:
 
-- `src/refresh_data.py`
-- `src/scraper.py`
-- `src/build_dataset.py`
+- `src/agent.py` — main agent workflow in `run_pricing_agent()`
+- `main.py` — FastAPI app and user-facing chatbot flow
 
-### 3. Structured output / prompt parsing
+### 2. Agents as functions inside a web app
 
-The app converts messy user input into structured pricing fields such as product type, customer segment, positioning goal, and constraints. This makes the downstream simulation and recommendation more reliable.
+The pricing agent is implemented as a callable backend workflow and exposed through FastAPI routes. This follows the class idea that an agent can be treated as a function inside a larger application: input comes from the UI, the backend runs the agent workflow, and the result is returned to the user.
+
+File references:
+
+- `main.py` — web server, API routes, and UI
+- `src/agent.py` — callable pricing-agent workflow
+
+### 3. Tool calling / external data retrieval
+
+PricePilot uses external data-retrieval functions to ground its recommendations in market data. The agent attempts to fetch live Google Shopping competitor data through SerpApi and falls back to curated competitor pricing data when live data is unavailable.
+
+File references:
+
+- `src/refresh_data.py` — live Google Shopping / SerpApi retrieval
+- `src/scraper.py` — curated fallback competitor pricing data
+- `src/agent.py` — chooses live data or fallback data
+
+### 4. Structured output / constrained parsing
+
+PricePilot converts messy natural-language user input into structured pricing fields before running the analysis. The parser extracts fields such as product query, pricing objective, audience, positioning, key features, sales channel, launch stage, price sensitivity, and risk tolerance.
+
+This is not full token-level constrained decoding, but it uses structured JSON-style output and fallback parsing to make the rest of the workflow more reliable.
 
 File reference:
 
-- `src/prompt_parser.py`
+- `src/prompt_parser.py` — `parse_pricing_prompt()`
 
-### 4. Simulation and decision optimization
+### 5. Prompt and context engineering
 
-PricePilot simulates price points and estimates expected revenue impact. This adds a quantitative layer to the agent instead of only producing generic pricing advice.
+The LLM explanation step uses a structured prompt with a clear role, market context, recommendation data, objective-specific rules, and required response sections. This keeps the final explanation tied to the actual pricing analysis instead of producing generic business advice.
 
-File references:
-
-- `src/simulation.py`
-- `src/recommendation.py`
-
-### 5. LLM reasoning and explanation
-
-The LLM is used after the quantitative analysis to explain the recommendation in plain English. This makes the product more useful for non-technical founders.
+The prompts mostly use positive formatting constraints, such as required sections and concise answer structure, while using a few negative constraints for important business-safety cases, such as preventing the model from calling a growth-optimized price a revenue-maximizing price.
 
 File reference:
 
-- `src/llm_reasoning.py`
+- `src/llm_reasoning.py` — `generate_business_explanation()` and advisor response logic
 
 ### 6. Guardrails and fallback behavior
 
-The app includes fallback data and pricing guardrails so the demo remains stable even if live APIs fail or the LLM is unavailable.
+PricePilot includes rule-based guardrails to make recommendations safer and more business-realistic. For example, if the user gives a cost floor, the agent prevents the recommended price from going below that minimum. The app also includes fallback data and fallback explanations so the demo remains reliable if an API key is missing or an external service fails.
 
 File references:
 
-- `src/agent.py`
-- `src/llm_reasoning.py`
-- `src/recommendation.py`
+- `src/agent.py` — cost-floor and recommendation guardrails
+- `src/llm_reasoning.py` — fallback explanation text
+- `src/scraper.py` — fallback competitor data
+
+### 7. Simulation, benchmarking, and evaluation mindset
+
+PricePilot does not rely only on LLM advice. It computes market benchmarks, simulates prices across a demand curve, and compares expected customers and expected revenue across price points. This turns the agent into an analytics workflow rather than a generic chatbot.
+
+File references:
+
+- `src/benchmarking.py` — market summary statistics
+- `src/simulation.py` — revenue and conversion simulation
+- `src/recommendation.py` — objective-based price selection
 
 ## Why These Technical Choices Fit the Business Case
 
 PricePilot is built for founders and small teams who need fast, practical pricing guidance without hiring a pricing consultant.
 
 - **Live market data** makes the recommendation more realistic.
-- **Fallback data** keeps the product reliable during demos and reduces dependency on external APIs.
+- **Structured parsing** turns vague founder input into fields the pricing workflow can use.
 - **Revenue simulation** helps users compare tradeoffs between lower prices, higher conversion, and higher revenue.
-- **LLM reasoning** makes the output easy to understand.
+- **Objective-based recommendation logic** lets the agent adapt to different pricing goals, such as growth, revenue, competitive entry, or premium positioning.
+- **Guardrails** prevent unrealistic recommendations, such as pricing below a user-provided cost floor.
+- **LLM reasoning** makes the output easy to understand for non-technical users.
 - **Advisor follow-up** makes the product feel like an interactive pricing strategist rather than a static calculator.
 - **FastAPI** makes the app simple to deploy and interact with through a web interface.
-
-## Business Model
-
-PricePilot could be sold as a lightweight SaaS tool for founders and small ecommerce operators.
-
-Example pricing:
-
-- Starter: $29/month for basic pricing analyses
-- Pro: $79/month for more searches, advisor follow-ups, and saved pricing plans
-
-The cost to serve one user is relatively low because each analysis only requires a small number of search/API calls and lightweight LLM reasoning. This makes the product plausible as a subscription business if users run multiple pricing analyses per month.
 
 ## Local Setup
 
@@ -234,42 +235,6 @@ Open:
 ```text
 http://localhost:8000
 ```
-
-## Deployment
-
-The deployed app is available here:
-
-```text
-PASTE DEPLOYED URL HERE
-```
-
-## Demo Walkthrough
-
-1. Open the live URL.
-2. Enter a product launch prompt.
-3. Confirm or adjust the strategy profile.
-4. Click the pricing analysis button.
-5. Review the recommended launch price.
-6. Show the revenue curve and competitor snapshot.
-7. Ask one advisor follow-up question, such as:
-
-```text
-What pricing test should we run first?
-```
-
-or
-
-```text
-Give me a 30-day launch pricing plan.
-```
-
-## Limitations
-
-- Competitor data quality depends on the available search results.
-- The revenue simulation uses simplified elasticity assumptions, so it is best used for directional decision-making rather than exact forecasting.
-- The product is strongest for early pricing strategy and launch planning, not long-term enterprise pricing optimization.
-- The current version does not yet store historical experiments or user accounts.
-
 ## Future Improvements
 
 - Save previous pricing analyses for each user
@@ -278,3 +243,4 @@ Give me a 30-day launch pricing plan.
 - Add competitor feature extraction from reviews
 - Add exportable pricing reports
 - Add team/account support for small businesses
+- Add historical experiment tracking so users can compare predicted vs. actual pricing results
