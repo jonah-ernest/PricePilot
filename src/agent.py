@@ -323,9 +323,6 @@ def run_pricing_agent(category):
         objective=objective,
     )
 
-    if recommendation.get("guardrail_note"):
-        explanation = f"{explanation}\n\n**Guardrail:** {recommendation['guardrail_note']}"
-
     return {
         "needs_clarification": False,
         "steps": steps,

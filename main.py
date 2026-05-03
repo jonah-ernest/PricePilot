@@ -1573,12 +1573,31 @@ def format_explanation_markdown(text):
 
     raw = str(text).strip().replace("\r\n", "\n")
 
-    # Normalize bold markdown labels to plain labels before parsing.
-    for label in ["Direct answer", "Why", "Tradeoff", "Next step"]:
+    # Normalize section labels.
+    for label in ["Direct answer", "Why", "Tradeoff", "Next step", "Guardrail"]:
         raw = raw.replace(f"**{label}:**", f"{label}:")
+        raw = raw.replace(f"*{label}:*", f"{label}:")
+        raw = raw.replace(f"{label}: ", f"{label}: ")
+
+    # Force major labels onto their own lines even if the LLM puts them inline.
+    for label in ["Direct answer", "Why", "Tradeoff", "Next step", "Guardrail"]:
+        raw = re.sub(
+            rf"\s*{label}:\s*",
+            f"\n\n{label}: ",
+            raw,
+            flags=re.IGNORECASE,
+        )
+
+    # Remove guardrail from the explanation because it is rendered separately.
+    raw = re.sub(
+        r"\n\nGuardrail:\s*.*$",
+        "",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     labels = ["Direct answer", "Why", "Tradeoff", "Next step"]
-    sections = {}
+    sections = {label: "" for label in labels}
     current = None
 
     for line in raw.split("\n"):
@@ -1586,36 +1605,28 @@ def format_explanation_markdown(text):
         if not line:
             continue
 
-        found_label = None
+        matched_label = None
         for label in labels:
             prefix = f"{label}:"
             if line.lower().startswith(prefix.lower()):
-                found_label = label
+                matched_label = label
                 current = label
-                value = line[len(prefix):].strip()
-                sections[label] = value
+                sections[label] += line[len(prefix):].strip()
                 break
 
-        if found_label:
+        if matched_label:
             continue
 
         if current:
             if line.startswith("-") or line.startswith("•"):
-                sections[current] = (sections.get(current, "") + "\n" + line).strip()
+                sections[current] += "\n" + line
             else:
-                sections[current] = (sections.get(current, "") + " " + line).strip()
+                sections[current] += " " + line
 
-    def clean_value(label):
-        value = sections.get(label, "").strip()
-        prefix = f"{label}:"
-        if value.lower().startswith(prefix.lower()):
-            value = value[len(prefix):].strip()
-        return value
-
-    direct = clean_value("Direct answer")
-    why = clean_value("Why")
-    tradeoff = clean_value("Tradeoff")
-    next_step = clean_value("Next step")
+    direct = sections["Direct answer"].strip()
+    why = sections["Why"].strip()
+    tradeoff = sections["Tradeoff"].strip()
+    next_step = sections["Next step"].strip()
 
     parts = []
 
@@ -1623,25 +1634,20 @@ def format_explanation_markdown(text):
         parts.append(f"**Direct answer:** {direct}")
 
     if why:
-        why = why.replace("•", "\n-")
+        why = why.replace("•", "-")
         why_lines = [line.strip() for line in why.split("\n") if line.strip()]
-
         bullets = []
-        non_bullets = []
 
         for line in why_lines:
-            if line.startswith("-"):
-                item = line.lstrip("-").strip()
-                if item:
-                    bullets.append(item)
-            else:
-                non_bullets.append(line)
+            line = line.lstrip("-").strip()
+            if line:
+                bullets.append(line)
 
         if bullets:
-            bullet_text = "\n".join(f"- {item}" for item in bullets)
+            bullet_text = "\n".join(f"- {item}" for item in bullets[:2])
             parts.append(f"**Why:**\n\n{bullet_text}")
-        elif non_bullets:
-            parts.append(f"**Why:** {' '.join(non_bullets)}")
+        else:
+            parts.append(f"**Why:** {why}")
 
     if tradeoff:
         parts.append(f"**Tradeoff:** {tradeoff}")
