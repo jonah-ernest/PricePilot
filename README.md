@@ -6,7 +6,7 @@ Instead of forcing users to manually search competitor prices and guess a price 
 
 ## Live Demo
 
-Live URL:
+Live URL: [https://pricepilot-32821842407.us-east1.run.app](https://pricepilot-32821842407.us-east1.run.app)
 
 ## Product Overview
 
